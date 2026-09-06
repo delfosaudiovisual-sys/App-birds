@@ -30,9 +30,9 @@ O arquivo único serve para dar uma olhada no app. Para usar de verdade, use o e
 
 O repositório já tem a publicação automática configurada. Falta só ligá-la:
 
-1. No GitHub, abra **Settings → Pages** do repositório `App-birds`.
-2. Em **Source**, escolha **GitHub Actions**. Salve.
-3. Vá em **Actions** e rode o fluxo **"Publicar no GitHub Pages"** (ou faça qualquer push).
+1. Abra direto: **https://github.com/delfosaudiovisual-sys/App-birds/settings/pages**
+2. Em **Source**, escolha **GitHub Actions**. (Não precisa salvar; a escolha já vale.)
+3. Vá em **Actions → Publicar no GitHub Pages → Re-run all jobs**, ou faça qualquer push.
 4. Ao terminar, o endereço será:
 
    ```
@@ -51,10 +51,17 @@ Agora, **no iPhone**:
 Pronto. A partir daí ele abre offline, sem sinal, e a análise do canto continua rodando dentro do
 aparelho.
 
+> O repositório é público, então o Pages é gratuito. Enquanto ele não estiver ligado, o build
+> continua passando: o passo do Pages é tolerado e a publicação simplesmente não roda, em vez de
+> reprovar a execução inteira.
+
 ## Opção 2 — o arquivo único `ornis.html`
 
-Gerado por `npm run build:single`, ou baixável em
-`https://delfosaudiovisual-sys.github.io/App-birds/ornis.html` depois da publicação.
+Três lugares para pegá-lo, do mais fácil ao mais técnico:
+
+- **Actions → última execução → Artifacts → `ornis-html`** (anexado a cada build, mesmo sem Pages)
+- `https://delfosaudiovisual-sys.github.io/App-birds/ornis.html`, depois da publicação
+- `npm run build:single` na sua máquina
 
 São 588 KB, sem nenhuma dependência externa: todo o código, os estilos e os ícones estão dentro do
 arquivo. Mande por AirDrop, e-mail ou iCloud Drive e abra no iPhone.
