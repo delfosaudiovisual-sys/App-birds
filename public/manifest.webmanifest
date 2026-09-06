@@ -1,0 +1,24 @@
+{
+  "name": "Ornis — identificador de cantos de aves",
+  "short_name": "Ornis",
+  "description": "Identifica aves brasileiras pelo canto e por foto, classifica o tipo de vocalizacao e guarda tudo numa pokedex offline.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b1113",
+  "theme_color": "#0b1113",
+  "lang": "pt-BR",
+  "dir": "ltr",
+  "categories": ["education", "utilities", "lifestyle"],
+  "icons": [
+    { "src": "./icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Gravar canto", "short_name": "Gravar", "url": "./?tab=ouvir" },
+    { "name": "Abrir pokedex", "short_name": "Pokedex", "url": "./?tab=dex" }
+  ]
+}
