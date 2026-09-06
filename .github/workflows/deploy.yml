@@ -25,6 +25,11 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      # Diz ao job de publicacao se o Pages esta ligado. Sem isso, o repositorio
+      # inteiro fica vermelho a cada push so porque uma configuracao do site do
+      # GitHub — que nao da para mexer daqui — ainda nao foi marcada.
+      pages_ready: ${{ steps.pages.outcome == 'success' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -48,14 +53,44 @@ jobs:
           npm run build:single
           cp ornis.html dist/ornis.html
 
-      - uses: actions/configure-pages@v5
+      # O arquivo unico fica baixavel na pagina desta execucao mesmo quando o
+      # Pages ainda nao esta ligado, entao sempre ha um caminho para levar o app
+      # ao aparelho.
+      - name: Publicar ornis.html como anexo da execucao
+        uses: actions/upload-artifact@v4
+        with:
+          name: ornis-html
+          path: ornis.html
+          if-no-files-found: error
+
+      # `continue-on-error` porque este passo falha por um motivo esperado:
+      # Pages ainda nao ativado no repositorio. Nao e defeito do codigo, e nao
+      # deve reprovar a verificacao de tipos e os testes que ja passaram acima.
+      - name: Configurar Pages
+        id: pages
+        continue-on-error: true
+        uses: actions/configure-pages@v5
+
+      - name: Explicar o que falta quando o Pages esta desligado
+        if: steps.pages.outcome != 'success'
+        run: |
+          echo "::warning title=GitHub Pages desligado::O app foi construido e testado com sucesso, mas nao ha para onde publicar."
+          echo ""
+          echo "Para ligar, uma vez so:"
+          echo "  1. Settings -> Pages neste repositorio"
+          echo "  2. Em 'Source', escolha 'GitHub Actions'"
+          echo "  3. Rode este fluxo de novo"
+          echo ""
+          echo "Enquanto isso, o arquivo unico ornis.html esta anexado a esta execucao."
 
       - uses: actions/upload-pages-artifact@v3
+        if: steps.pages.outcome == 'success'
         with:
           path: dist
 
   deploy:
     needs: build
+    if: needs.build.outputs.pages_ready == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
