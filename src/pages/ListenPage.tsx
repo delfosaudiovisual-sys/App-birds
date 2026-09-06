@@ -9,7 +9,7 @@ import { newId, type Sighting } from '../engine/store/db';
 import { persistSighting } from '../engine/store/capture';
 import type { Settings } from '../engine/store/settings';
 import { Badge, EvidenceList, Meter, Notice } from '../components/ui';
-import { BirdArt } from '../components/BirdArt';
+import { SpeciesImage } from '../components/SpeciesImage';
 import { MicIcon, SongTypeIcon, StopIcon, UploadIcon, PinIcon, SparkIcon } from '../components/icons';
 
 type Phase = 'idle' | 'recording' | 'analyzing' | 'done';
@@ -394,8 +394,8 @@ export function ListenPage({ settings, onSaved, onOpenSpecies, onEnvironmentChan
               <div className="card">
                 <div className="card__title">Especie mais provavel</div>
                 <div className="row" style={{ alignItems: 'flex-start' }}>
-                  <div style={{ width: 84, flex: 'none', borderRadius: 12, overflow: 'hidden' }}>
-                    <BirdArt species={top.species} />
+                  <div className="match-thumb">
+                    <SpeciesImage species={top.species} allowReference={settings.referencePhotos} />
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <button

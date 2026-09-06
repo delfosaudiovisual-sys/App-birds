@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { getSpecies, SPECIES_NUMBER } from '../data/species';
 import { SONG_TYPES, type SongTypeId } from '../engine/audio/songType';
 import { deleteSighting, type Sighting } from '../engine/store/db';
-import { BirdArt } from '../components/BirdArt';
+import { SpeciesImage } from '../components/SpeciesImage';
 import { Badge, CONSERVATION_LABELS, Empty, Notice, RARITY_LABELS } from '../components/ui';
 import { BookIcon, ChevronLeftIcon, PinIcon, SongTypeIcon, TrashIcon } from '../components/icons';
 
@@ -11,6 +11,7 @@ interface Props {
   sightings: Sighting[];
   onBack: () => void;
   onChanged: () => void;
+  referencePhotos: boolean;
 }
 
 const METRIC_LABELS: Record<string, { label: string; unit: string }> = {
@@ -41,7 +42,7 @@ function formatDate(ms: number): string {
   });
 }
 
-export function SpeciesPage({ speciesId, sightings, onBack, onChanged }: Props) {
+export function SpeciesPage({ speciesId, sightings, onBack, onChanged, referencePhotos }: Props) {
   const species = getSpecies(speciesId);
   const [expanded, setExpanded] = useState<string | null>(null);
 
@@ -49,6 +50,13 @@ export function SpeciesPage({ speciesId, sightings, onBack, onChanged }: Props) 
     () => sightings.filter((s) => s.speciesId === speciesId).sort((a, b) => b.timestamp - a.timestamp),
     [sightings, speciesId],
   );
+
+  // A foto do registro mais confiavel do usuario vira o retrato da especie.
+  const bestUserPhoto = useMemo(() => {
+    const withPhoto = mine.filter((s) => s.kind === 'foto' && s.thumbnail);
+    if (withPhoto.length === 0) return undefined;
+    return withPhoto.reduce((a, b) => (b.confidence > a.confidence ? b : a)).thumbnail;
+  }, [mine]);
 
   const songTypesSeen = useMemo(() => {
     const set = new Set<SongTypeId>();
@@ -80,7 +88,13 @@ export function SpeciesPage({ speciesId, sightings, onBack, onChanged }: Props) 
 
       <div className="hero">
         <div className="hero__art">
-          <BirdArt species={species} locked={!discovered} />
+          <SpeciesImage
+            species={species}
+            locked={!discovered}
+            userPhoto={bestUserPhoto}
+            allowReference={referencePhotos}
+            showCredit
+          />
         </div>
         <div className="hero__body">
           <div className="tiny dim" style={{ fontWeight: 700, letterSpacing: '0.06em' }}>

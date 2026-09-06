@@ -105,6 +105,7 @@ export default function App() {
             sightings={sightings}
             onBack={() => setOpenSpecies(null)}
             onChanged={() => void refresh()}
+            referencePhotos={settings.referencePhotos}
           />
         ) : tab === 'ouvir' ? (
           <ListenPage
@@ -116,7 +117,7 @@ export default function App() {
         ) : tab === 'foto' ? (
           <PhotoPage settings={settings} onSaved={() => void refresh()} onOpenSpecies={goToSpecies} />
         ) : tab === 'dex' ? (
-          <DexPage progress={progress} onOpenSpecies={goToSpecies} />
+          <DexPage progress={progress} onOpenSpecies={goToSpecies} referencePhotos={settings.referencePhotos} />
         ) : (
           <SettingsPage
             settings={settings}

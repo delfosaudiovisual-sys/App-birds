@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { ALL_SPECIES, SPECIES_NUMBER } from '../data/species';
 import type { Species } from '../data/types';
 import type { SpeciesProgress } from '../engine/store/db';
-import { BirdArt } from '../components/BirdArt';
+import { SpeciesImage } from '../components/SpeciesImage';
 import { Empty, ProgressRing } from '../components/ui';
 import { BookIcon, SearchIcon } from '../components/icons';
 
@@ -11,6 +11,8 @@ type Filter = 'todas' | 'descobertas' | 'faltando';
 interface Props {
   progress: Map<string, SpeciesProgress>;
   onOpenSpecies: (id: string) => void;
+  /** busca de fotos de referencia ligada nos ajustes */
+  referencePhotos: boolean;
 }
 
 function normalize(text: string): string {
@@ -20,7 +22,7 @@ function normalize(text: string): string {
     .toLowerCase();
 }
 
-export function DexPage({ progress, onOpenSpecies }: Props) {
+export function DexPage({ progress, onOpenSpecies, referencePhotos }: Props) {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('todas');
 
@@ -107,6 +109,7 @@ export function DexPage({ progress, onOpenSpecies }: Props) {
               key={species.id}
               species={species}
               progress={progress.get(species.id)}
+              referencePhotos={referencePhotos}
               onOpen={() => onOpenSpecies(species.id)}
             />
           ))}
@@ -119,10 +122,12 @@ export function DexPage({ progress, onOpenSpecies }: Props) {
 function DexCard({
   species,
   progress,
+  referencePhotos,
   onOpen,
 }: {
   species: Species;
   progress?: SpeciesProgress;
+  referencePhotos: boolean;
   onOpen: () => void;
 }) {
   const discovered = Boolean(progress);
@@ -141,7 +146,12 @@ function DexCard({
     >
       <span className="dex-card__num">#{String(number).padStart(3, '0')}</span>
       <div className="dex-card__art">
-        <BirdArt species={species} locked={!discovered} />
+        <SpeciesImage
+          species={species}
+          locked={!discovered}
+          userPhoto={progress?.userPhoto}
+          allowReference={referencePhotos}
+        />
       </div>
       <div>
         <div className="dex-card__name">{discovered ? species.commonName : '???'}</div>

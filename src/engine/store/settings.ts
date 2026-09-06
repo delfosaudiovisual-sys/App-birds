@@ -10,6 +10,8 @@ export interface Settings {
   cloudApiKey: string;
   /** grava a localizacao junto com o registro */
   saveLocation: boolean;
+  /** baixa fotos reais das especies (uma vez por especie, depois fica offline) */
+  referencePhotos: boolean;
   /** guarda o audio original (ocupa mais espaco) */
   keepAudio: boolean;
   /** duracao alvo da gravacao, em segundos */
@@ -28,6 +30,7 @@ export const DEFAULT_SETTINGS: Settings = {
   cloudEnabled: false,
   cloudApiKey: '',
   saveLocation: true,
+  referencePhotos: true,
   keepAudio: true,
   recordSeconds: 8,
   largeText: false,

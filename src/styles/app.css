@@ -852,3 +852,63 @@ html[data-reduce-motion='true'] *::after {
     transform: none;
   }
 }
+
+/* --------------------------------------------------- credito de foto */
+
+.photo-credit {
+  padding: 6px 10px;
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--text-dim);
+  background: rgba(0, 0, 0, 0.35);
+  text-align: left;
+}
+
+.photo-credit a {
+  color: var(--text-muted);
+  text-decoration: underline;
+}
+
+.hero__art figure,
+.dex-card__art figure {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.hero__art figure img,
+.dex-card__art figure img {
+  flex: 1;
+  min-height: 0;
+  object-fit: cover;
+}
+
+/* Miniatura do resultado: proporcao fixa porque o conteudo pode ser um SVG
+   (que traz a propria proporcao) ou uma <img> (que nao traz nenhuma e
+   esticaria ate a altura do cartao). */
+.match-thumb {
+  width: 84px;
+  aspect-ratio: 1 / 1;
+  flex: none;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg-input);
+}
+
+.match-thumb figure,
+.match-thumb svg {
+  width: 100%;
+  height: 100%;
+}
+
+.match-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Na miniatura pequena o credito nao cabe; ele aparece na ficha da especie. */
+.match-thumb .photo-credit {
+  display: none;
+}

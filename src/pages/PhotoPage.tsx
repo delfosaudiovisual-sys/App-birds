@@ -5,7 +5,7 @@ import { newId, type Sighting } from '../engine/store/db';
 import { persistSighting } from '../engine/store/capture';
 import type { Settings } from '../engine/store/settings';
 import { Badge, EvidenceList, Notice } from '../components/ui';
-import { BirdArt } from '../components/BirdArt';
+import { SpeciesImage } from '../components/SpeciesImage';
 import { CameraIcon, UploadIcon, SparkIcon } from '../components/icons';
 
 interface Props {
@@ -217,8 +217,8 @@ export function PhotoPage({ settings, onSaved, onOpenSpecies }: Props) {
                 {analysis.identification.assistedBy && ` · reforcada por ${analysis.identification.assistedBy}`}
               </div>
               <div className="row" style={{ alignItems: 'flex-start' }}>
-                <div style={{ width: 84, flex: 'none', borderRadius: 12, overflow: 'hidden' }}>
-                  <BirdArt species={top.species} />
+                <div className="match-thumb">
+                  <SpeciesImage species={top.species} allowReference={settings.referencePhotos} />
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <button

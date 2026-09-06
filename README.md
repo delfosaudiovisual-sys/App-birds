@@ -12,6 +12,10 @@ Também identifica por foto.
 extração de características acústicas → comparação com a base de espécies. Uma gravação de 8 s é
 analisada em poucas dezenas de milissegundos. Nada é enviado para nenhum servidor.
 
+**Pistas de campo.** Duas perguntas que qualquer pessoa responde olhando para a ave — onde você está
+e o tamanho dela — e o acerto quase dobra. Elas entram como peso, nunca como filtro: uma ave fora do
+habitat esperado recua na lista, mas continua visível.
+
 **Tipo de canto.** A partir da frequência, do tom, do ritmo e da melodia, o app estima a
 probabilidade de cada função:
 
@@ -31,18 +35,53 @@ ou ruidosa demais para concluir.
 mede padrão (liso, barrado, listrado, mascarado), contraste e silhueta, e compara com o perfil
 visual de cada espécie. Opcionalmente pode ser reforçada por um modelo de visão na nuvem.
 
-**Pokédex.** 58 espécies brasileiras com ficha completa: aparência, comportamento, habitat,
-alimentação, distribuição, descrição do canto e curiosidade. Espécies não descobertas aparecem
-como silhueta. Cada registro guarda o espectrograma, as medidas acústicas, as probabilidades por
-tipo de canto, o áudio original e a localização.
+**Pokédex com fotos reais.** 58 espécies brasileiras com ficha completa: aparência, comportamento,
+habitat, alimentação, distribuição, descrição do canto e curiosidade. Espécies não descobertas
+aparecem como silhueta. Cada registro guarda o espectrograma, as medidas acústicas, as
+probabilidades por tipo de canto, o áudio original e a localização.
+
+A imagem de cada espécie é resolvida em três degraus:
+
+1. **Sua própria foto.** Quando você registra uma ave por foto, ela vira o retrato daquela espécie.
+   Não depende de rede nem de licença de terceiros — e transforma a pokédex numa coleção de fato.
+2. **Foto de referência da Wikimedia Commons**, buscada uma única vez por espécie e guardada no
+   aparelho, exibida sempre com autor e licença. Depois da primeira busca funciona offline.
+3. **Ilustração vetorial**, gerada a partir do perfil de cor da espécie. Nunca falha, nunca busca
+   nada, e aparece de imediato enquanto o degrau 2 carrega — a tela nunca fica vazia esperando rede.
+
+Fotos sem crédito de autoria e licença não são usadas: nesse caso fica a ilustração.
+
+## Precisão: o número, e o que ele significa
+
+O repositório traz uma **bancada de precisão** (`npm run bench`). Ela sintetiza vocalizações a partir
+do perfil de cada espécie, degradadas como uma gravação de campo degrada — ruído, distância,
+desafinação, andamento diferente, trecho cortado — e mede o acerto entre as 58 espécies.
+
+| | top-1 | top-3 |
+|---|---|---|
+| Primeira versão | 8,3% | 20,3% |
+| Atual, sem pistas de campo | **25,0%** | **46,9%** |
+| Atual, com ambiente e tamanho informados | **42,4%** | **72,7%** |
+| Acaso | 1,7% | 5,2% |
+
+**O que a bancada mede:** se as espécies da base são distinguíveis entre si pelo motor, e se o
+acerto sobrevive à degradação.
+
+**O que ela não mede:** acerto em gravação real. Os sinais são sintetizados a partir dos mesmos
+perfis que o identificador consulta, então há circularidade — um perfil errado passa despercebido.
+Para acerto de campo só serve gravação real etiquetada. O valor da bancada é outro: transforma
+"melhorei o algoritmo" em número verificável, e foi ela que expôs três defeitos concretos (janela de
+análise mais longa que as notas do trinado, tonalidade saturada em zero, banda contaminada por
+ruído) que nenhuma inspeção de código tinha pego.
 
 ## Honestidade sobre a precisão
 
 - **A espécie** é determinada por casamento de características acústicas contra perfis descritos
-  espécie a espécie, incluindo alinhamento temporal (DTW) do contorno melódico. Não é uma rede
-  neural treinada em milhares de gravações: vai bem com cantos estruturados e característicos
-  (sabiá, bem-te-vi, joão-de-barro, pitiguari) e pior com trinados genéricos e agudos. O app diz
-  quando o resultado é disputado e sempre mostra as 5 melhores hipóteses para você corrigir.
+  espécie a espécie, incluindo alinhamento temporal (DTW) da sequência de alturas das notas. Não é
+  uma rede neural treinada em milhares de gravações: vai bem com cantos estruturados e
+  característicos (sabiá, bem-te-vi, joão-de-barro, pitiguari) e pior com trinados genéricos e
+  agudos. O app diz quando o resultado é disputado e sempre mostra as 5 melhores hipóteses para você
+  corrigir.
 - **O tipo de canto** é uma inferência estrutural apoiada em bioacústica, não uma observação de
   comportamento. É uma hipótese sobre a função, não um fato sobre a intenção da ave. A confiança
   cai automaticamente quando há poucas notas ou o trecho é curto demais para medir repetição.
@@ -56,7 +95,8 @@ Sua correção manual é gravada no registro, então a pokédex reflete o que vo
 ```bash
 npm install
 npm run dev      # servidor de desenvolvimento
-npm test         # 36 testes do motor de DSP e de visão
+npm test         # 47 testes do motor de DSP, de visão e de fotos (segundos)
+npm run bench    # bancada de precisão da identificação por canto (minutos)
 npm run build    # gera dist/ + service worker de precache
 ```
 
@@ -95,20 +135,37 @@ distinguem uma espécie da outra.
 
 ```
 src/
-├── data/species.ts          58 espécies: perfil acústico, visual e ficha
+├── data/
+│   ├── species.ts           58 espécies: perfil acústico, visual e ficha
+│   └── occurrence.ts        ambiente e classe de tamanho (pistas de campo)
 ├── engine/
 │   ├── audio/               fft, spectrogram, features, songType, matcher, recorder, render
+│   │   ├── testing/synth.ts sintetizador de vocalizações para a bancada
+│   │   ├── precision.bench  mede acerto por condição de degradação
+│   │   └── experiment.bench compara funções de pontuação sobre features em cache
 │   ├── vision/              color (CIELAB), imageFeatures, photoMatcher, loadImage
+│   ├── photos/              busca e cache das fotos de referência
 │   ├── cloud/               identificação assistida opcional
 │   ├── store/               IndexedDB, ajustes, captura de registro
 │   └── analyze.ts           orquestra os pipelines
-├── components/              ícones, ilustração procedural das aves, UI
+├── components/              ícones, ilustração procedural, imagem da espécie, UI
 └── pages/                   Ouvir, Foto, Pokédex, Espécie, Ajustes
 ```
 
-As ilustrações das aves são **geradas em SVG** a partir do próprio perfil visual de cada espécie —
-o app não baixa nem embute fotos, então funciona inteiro offline e sem depender de licença de
-imagem de terceiros.
+### Sobre a busca de fotos
+
+A busca usa a Action API do MediaWiki (`prop=pageimages` na Wikipedia para achar a imagem principal
+do artigo do nome científico, depois `prop=imageinfo&iiprop=extmetadata` no Commons para autor e
+licença), com `origin=*` para CORS anônimo. Cai do português para o inglês quando o artigo não
+existe.
+
+⚠️ Os endpoints reais da Wikimedia estão bloqueados pela política de rede do ambiente onde este
+código foi escrito, então a chamada ao serviço real **não foi exercitada** aqui. O que está coberto
+por teste é tudo que pode quebrar do lado do app — montagem da URL, leitura das duas respostas,
+extração de autor e licença, limpeza do HTML e cada caminho de falha — contra um servidor local que
+replica o formato das respostas reais, e a cadeia completa (buscar → cachear → recarregar offline →
+foto ainda lá) foi verificada num navegador de verdade. Vale conferir uma vez no aparelho que a
+busca ao vivo funciona.
 
 ## Identificação assistida (opcional, desligada por padrão)
 

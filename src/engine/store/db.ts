@@ -27,9 +27,20 @@ export interface Sighting {
   note?: string;
 }
 
+import type { PhotoAttribution } from '../photos/wikimedia';
+
 const DB_NAME = 'ornis';
-const DB_VERSION = 1;
+/** v2 acrescentou o armazem de fotos de referencia */
+const DB_VERSION = 2;
 const STORE = 'sightings';
+const PHOTO_STORE = 'photos';
+
+export interface StoredPhoto {
+  speciesId: string;
+  blob: Blob;
+  attribution: PhotoAttribution;
+  fetchedAt: number;
+}
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -43,10 +54,15 @@ function openDb(): Promise<IDBDatabase> {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
+      // Cada armazem e criado so se faltar: quem ja tem a base na v1 recebe
+      // apenas o armazem novo, sem perder um registro sequer da pokedex.
       if (!db.objectStoreNames.contains(STORE)) {
         const store = db.createObjectStore(STORE, { keyPath: 'id' });
         store.createIndex('speciesId', 'speciesId', { unique: false });
         store.createIndex('timestamp', 'timestamp', { unique: false });
+      }
+      if (!db.objectStoreNames.contains(PHOTO_STORE)) {
+        db.createObjectStore(PHOTO_STORE, { keyPath: 'speciesId' });
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -55,16 +71,40 @@ function openDb(): Promise<IDBDatabase> {
   return dbPromise;
 }
 
-function tx<T>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+function tx<T>(
+  mode: IDBTransactionMode,
+  run: (store: IDBObjectStore) => IDBRequest<T>,
+  storeName: string = STORE,
+): Promise<T> {
   return openDb().then(
     (db) =>
       new Promise<T>((resolve, reject) => {
-        const transaction = db.transaction(STORE, mode);
-        const request = run(transaction.objectStore(STORE));
+        const transaction = db.transaction(storeName, mode);
+        const request = run(transaction.objectStore(storeName));
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error ?? new Error('Falha na operacao local'));
       }),
   );
+}
+
+export async function getStoredPhoto(speciesId: string): Promise<StoredPhoto | undefined> {
+  return tx<StoredPhoto | undefined>(
+    'readonly',
+    (store) => store.get(speciesId) as IDBRequest<StoredPhoto | undefined>,
+    PHOTO_STORE,
+  );
+}
+
+export async function putStoredPhoto(photo: StoredPhoto): Promise<void> {
+  await tx('readwrite', (store) => store.put(photo), PHOTO_STORE);
+}
+
+export async function listStoredPhotos(): Promise<StoredPhoto[]> {
+  return tx<StoredPhoto[]>('readonly', (store) => store.getAll() as IDBRequest<StoredPhoto[]>, PHOTO_STORE);
+}
+
+export async function clearStoredPhotos(): Promise<void> {
+  await tx('readwrite', (store) => store.clear(), PHOTO_STORE);
 }
 
 export function newId(): string {
@@ -99,6 +139,10 @@ export interface SpeciesProgress {
   songTypes: SongTypeId[];
   hasPhoto: boolean;
   hasAudio: boolean;
+  /** melhor foto propria do usuario para esta especie, como data URL */
+  userPhoto?: string;
+  /** confianca do registro que originou userPhoto, para escolher a melhor */
+  userPhotoConfidence?: number;
 }
 
 /** Agrega os registros por especie: e o "estado da pokedex". */
@@ -116,6 +160,8 @@ export function buildProgress(sightings: Sighting[]): Map<string, SpeciesProgres
         songTypes: s.songType ? [s.songType] : [],
         hasPhoto: s.kind === 'foto',
         hasAudio: s.kind === 'canto',
+        userPhoto: s.kind === 'foto' ? s.thumbnail : undefined,
+        userPhotoConfidence: s.kind === 'foto' ? s.confidence : undefined,
       });
       continue;
     }
@@ -124,7 +170,14 @@ export function buildProgress(sightings: Sighting[]): Map<string, SpeciesProgres
     current.lastSeen = Math.max(current.lastSeen, s.timestamp);
     current.bestConfidence = Math.max(current.bestConfidence, s.confidence);
     if (s.songType && !current.songTypes.includes(s.songType)) current.songTypes.push(s.songType);
-    if (s.kind === 'foto') current.hasPhoto = true;
+    if (s.kind === 'foto') {
+      current.hasPhoto = true;
+      // entre varias fotos da mesma especie, fica a do registro mais confiavel
+      if (s.thumbnail && s.confidence > (current.userPhotoConfidence ?? -1)) {
+        current.userPhoto = s.thumbnail;
+        current.userPhotoConfidence = s.confidence;
+      }
+    }
     if (s.kind === 'canto') current.hasAudio = true;
   }
   return map;
