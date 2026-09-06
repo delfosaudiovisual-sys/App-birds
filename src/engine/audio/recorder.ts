@@ -1,4 +1,4 @@
-import { nextPow2 } from './fft';
+import { nearestPow2 } from './fft';
 
 export interface RecordingResult {
   samples: Float32Array;
@@ -126,13 +126,27 @@ export async function startRecording(): Promise<RecorderHandle> {
 }
 
 /**
- * Escolhe a janela de analise a partir da taxa de amostragem: ~46 ms de janela
- * equilibra resolucao de frequencia (bins de ~22 Hz) com resolucao temporal
- * suficiente para separar notas de 30 ms de um trinado.
+ * Escolhe as DUAS janelas de analise a partir da taxa de amostragem.
+ *
+ * Uma janela unica nao resolve o problema: com 46 ms nao da para separar as
+ * notas de 35 ms de um trinado de corruira (a nota e mais curta que a janela),
+ * e com 11 ms nao da para medir a altura de um arrulho de 500 Hz. Entao sao
+ * duas — uma curta para tempo e ritmo, uma longa para altura e timbre.
  */
-export function analysisWindow(sampleRate: number): { fftSize: number; hopSize: number } {
-  const fftSize = Math.min(4096, Math.max(512, nextPow2(sampleRate * 0.046)));
-  return { fftSize, hopSize: fftSize / 4 };
+export function analysisWindow(sampleRate: number): {
+  timeFftSize: number;
+  timeHopSize: number;
+  freqFftSize: number;
+  freqHopSize: number;
+} {
+  const timeFftSize = Math.min(1024, Math.max(256, nearestPow2(sampleRate * 0.012)));
+  const freqFftSize = Math.min(4096, Math.max(1024, nearestPow2(sampleRate * 0.042)));
+  return {
+    timeFftSize,
+    timeHopSize: Math.max(32, timeFftSize / 4),
+    freqFftSize,
+    freqHopSize: Math.max(64, freqFftSize / 4),
+  };
 }
 
 /** Codifica PCM mono em WAV 16 bits, para guardar e reouvir o registro. */

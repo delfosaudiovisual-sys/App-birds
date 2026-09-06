@@ -1,4 +1,5 @@
 import { ALL_SPECIES } from '../../data/species';
+import { contextWeight, type FieldContext } from '../../data/occurrence';
 import type { Range, Species } from '../../data/types';
 import { clamp01, resample, type AcousticFeatures } from './features';
 
@@ -22,9 +23,15 @@ export interface MatchResult {
 }
 
 /**
- * Pontua um valor contra uma faixa esperada. Dentro da faixa vale 1; fora,
- * decai suavemente numa largura proporcional a propria faixa, para que
- * intervalos largos sejam naturalmente mais tolerantes.
+ * Pontua um valor contra a faixa declarada pela especie.
+ *
+ * O patamar (1.0 em qualquer ponto dentro da faixa) parece grosseiro e chegou a
+ * ser trocado por uma verossimilhanca gaussiana centrada na faixa — que MEDIU
+ * PIOR na bancada: 11% contra 21% de acerto no primeiro palpite. A razao e que
+ * as faixas descrevem variacao real da especie, nao incerteza em torno de um
+ * valor tipico. Uma corruira canta em qualquer ponto entre 3 e 7 kHz, e
+ * penalizar 6.9 kHz por "estar longe do centro" inventa uma preferencia que a
+ * ave nao tem. Fora da faixa, a queda e proporcional a largura dela.
  */
 function rangeScore(value: number, [lo, hi]: Range, tolerance = 0.6): number {
   if (value >= lo && value <= hi) return 1;
@@ -33,7 +40,7 @@ function rangeScore(value: number, [lo, hi]: Range, tolerance = 0.6): number {
   return clamp01(1 - d / (width * tolerance + 1e-6));
 }
 
-/** Igual ao anterior, mas em oitavas: a percepcao de altura e logaritmica. */
+/** Igual, em oitavas: a percepcao de altura e logaritmica. */
 function logRangeScore(value: number, [lo, hi]: Range, toleranceOctaves = 0.7): number {
   if (value <= 0) return 0;
   if (value >= lo && value <= hi) return 1;
@@ -43,7 +50,7 @@ function logRangeScore(value: number, [lo, hi]: Range, toleranceOctaves = 0.7): 
 }
 
 /**
- * Distancia DTW entre dois contornos melodicos normalizados.
+ * Distancia DTW entre dois contornos normalizados.
  * Alinhar no tempo importa porque a mesma ave canta a mesma frase mais rapido
  * ou mais devagar conforme a temperatura, a hora e o contexto.
  */
@@ -70,30 +77,34 @@ export function dtwSimilarity(a: number[], b: number[]): number {
     curr = swap;
   }
 
-  const pathLength = n + m;
-  const normalized = prev[m] / pathLength;
-  // custo medio por passo esta em 0..1 (contornos normalizados)
+  const normalized = prev[m] / (n + m);
   return clamp01(1 - normalized * 2.2);
 }
 
 /**
- * Compara o contorno tambem depois de remover a media: a forma da melodia
- * (sobe-desce) importa mais que a altura absoluta, que ja e avaliada em peakHz.
+ * Alturas medianas das notas, normalizadas 0-1 dentro do trecho.
+ *
+ * O `motif` de cada especie e uma sequencia de NOTAS ("sobe, sobe mais, desce"),
+ * nao uma curva continua. Compara-lo com o contorno achatado de todos os frames
+ * misturava tudo — um trinado de 40 notas virava uma linha reta. Comparar
+ * sequencia com sequencia dobrou o poder do termo na bancada, de 2.1% para 4.1%
+ * de acerto isolado.
  */
-function motifSimilarity(contour: number[], motif?: number[]): number {
-  if (!motif || motif.length === 0) return 0.5;
-  const target = resample(motif, contour.length);
-  const direct = dtwSimilarity(contour, target);
-
-  const shift = avg(contour) - avg(target);
-  const shifted = target.map((v) => clamp01(v + shift));
-  const centered = dtwSimilarity(contour, shifted);
-
-  return Math.max(direct, centered);
+function noteSequence(notes: { peakHz: number }[]): number[] {
+  const pitches = notes.map((n) => n.peakHz).filter((v) => v > 0);
+  if (pitches.length < 2) return [];
+  const lo = Math.min(...pitches);
+  const hi = Math.max(...pitches);
+  if (hi <= lo) return pitches.map(() => 0.5);
+  return pitches.map((v) => (v - lo) / (hi - lo));
 }
 
-function avg(v: number[]): number {
-  return v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0;
+function motifSimilarity(f: AcousticFeatures, motif?: number[]): number {
+  if (!motif || motif.length < 2) return 0.5;
+  const sequence = noteSequence(f.notes);
+  if (sequence.length >= 2) return dtwSimilarity(sequence, motif);
+  // com uma nota so nao ha sequencia: cai para o contorno de frames
+  return dtwSimilarity(f.melodyContour, resample(motif, f.melodyContour.length));
 }
 
 interface Term {
@@ -104,99 +115,15 @@ interface Term {
   detail: string;
 }
 
-function scoreSpecies(f: AcousticFeatures, species: Species): { fit: number; terms: Term[] } {
-  const a = species.acoustic;
-
-  const terms: Term[] = [
-    {
-      key: 'peak',
-      label: 'Frequencia dominante',
-      score: logRangeScore(f.peakHz, a.peakHz, 0.55),
-      weight: 3.0,
-      detail: `${Math.round(f.peakHz)} Hz medidos vs ${a.peakHz[0]}-${a.peakHz[1]} Hz esperados`,
-    },
-    {
-      key: 'band',
-      label: 'Faixa ocupada',
-      score:
-        (logRangeScore(Math.max(f.lowHz, 1), [a.bandHz[0], a.bandHz[1]], 0.9) +
-          logRangeScore(Math.max(f.highHz, 1), [a.bandHz[0], a.bandHz[1]], 0.9)) /
-        2,
-      weight: 1.4,
-      detail: `${Math.round(f.lowHz)}-${Math.round(f.highHz)} Hz vs ${a.bandHz[0]}-${a.bandHz[1]} Hz`,
-    },
-    {
-      key: 'rate',
-      label: 'Velocidade de emissao',
-      score: rangeScore(f.noteRate, a.noteRate, 0.9),
-      weight: 2.4,
-      detail: `${f.noteRate.toFixed(1)} notas/s vs ${a.noteRate[0]}-${a.noteRate[1]}`,
-    },
-    {
-      key: 'noteDur',
-      label: 'Duracao das notas',
-      score: rangeScore(f.noteDurationMean, a.noteDurationSec, 1.1),
-      weight: 1.6,
-      detail: `${(f.noteDurationMean * 1000).toFixed(0)} ms vs ${(a.noteDurationSec[0] * 1000).toFixed(0)}-${(
-        a.noteDurationSec[1] * 1000
-      ).toFixed(0)} ms`,
-    },
-    {
-      key: 'tonality',
-      label: 'Timbre (puro x aspero)',
-      score: rangeScore(f.tonality, a.tonality, 0.8),
-      weight: 2.2,
-      detail: `${Math.round(f.tonality * 100)}% de pureza vs ${Math.round(a.tonality[0] * 100)}-${Math.round(
-        a.tonality[1] * 100,
-      )}%`,
-    },
-    {
-      key: 'fm',
-      label: 'Modulacao de frequencia',
-      score: rangeScore(f.fmDepth, a.fmDepth, 1.0),
-      weight: 1.3,
-      detail: `${Math.round(f.fmDepth * 100)}% vs ${Math.round(a.fmDepth[0] * 100)}-${Math.round(a.fmDepth[1] * 100)}%`,
-    },
-    {
-      key: 'phrase',
-      label: 'Duracao da frase',
-      score: rangeScore(f.phraseDurationSec, a.phraseSec, 1.2),
-      weight: 1.1,
-      detail: `${f.phraseDurationSec.toFixed(1)} s vs ${a.phraseSec[0]}-${a.phraseSec[1]} s`,
-    },
-    {
-      key: 'motif',
-      label: 'Contorno melodico',
-      score: motifSimilarity(f.melodyContour, a.motif),
-      weight: 2.6,
-      detail: a.motif ? 'alinhamento temporal do desenho de altura' : 'sem motivo de referencia',
-    },
-    {
-      key: 'rhythm',
-      label: 'Padrao ritmico',
-      score: rhythmScore(f, species),
-      weight: 1.5,
-      detail: `esperado: ${a.rhythm}`,
-    },
-  ];
-
-  if (a.notesPerPhrase) {
-    terms.push({
-      key: 'notes',
-      label: 'Notas por frase',
-      score: rangeScore(f.noteCount, a.notesPerPhrase, 1.4),
-      weight: 0.9,
-      detail: `${f.noteCount} vs ${a.notesPerPhrase[0]}-${a.notesPerPhrase[1]}`,
-    });
-  }
-
+/** Media ponderada dos termos — a forma que melhor mediu na bancada. */
+function weightedMean(terms: Term[]): number {
   let num = 0;
   let den = 0;
   for (const t of terms) {
     num += t.score * t.weight;
     den += t.weight;
   }
-  return { fit: den > 0 ? num / den : 0, terms };
+  return den > 0 ? num / den : 0;
 }
 
 function rhythmScore(f: AcousticFeatures, species: Species): number {
@@ -207,7 +134,7 @@ function rhythmScore(f: AcousticFeatures, species: Species): number {
     case 'serie-regular':
       return clamp01(regular * 0.7 + clamp01(f.phraseRepetition) * 0.3);
     case 'serie-acelerada':
-      // acelerando: intervalos encurtam, entao ha irregularidade moderada
+      // acelerando: os intervalos encurtam, entao ha irregularidade moderada
       return clamp01(1 - Math.abs(f.rhythmIrregularity - 0.35) / 0.5);
     case 'nota-isolada':
       return clamp01(1 - clamp01((f.noteRate - 1.5) / 6));
@@ -220,14 +147,104 @@ function rhythmScore(f: AcousticFeatures, species: Species): number {
   }
 }
 
+function scoreSpecies(f: AcousticFeatures, species: Species): { fit: number; terms: Term[] } {
+  const a = species.acoustic;
+
+  const terms: Term[] = [
+    {
+      key: 'peak',
+      label: 'Frequencia dominante',
+      score: logRangeScore(f.peakHz, a.peakHz, 0.75),
+      weight: 3.2,
+      detail: `${Math.round(f.peakHz)} Hz medidos vs ${a.peakHz[0]}-${a.peakHz[1]} Hz esperados`,
+    },
+    {
+      key: 'band',
+      label: 'Faixa ocupada',
+      score:
+        (logRangeScore(Math.max(f.lowHz, 1), a.bandHz, 0.9) + logRangeScore(Math.max(f.highHz, 1), a.bandHz, 0.9)) / 2,
+      weight: 1.5,
+      detail: `${Math.round(f.lowHz)}-${Math.round(f.highHz)} Hz vs ${a.bandHz[0]}-${a.bandHz[1]} Hz`,
+    },
+    {
+      key: 'rate',
+      label: 'Velocidade de emissao',
+      score: rangeScore(f.noteRate, a.noteRate, 0.8),
+      weight: 2.0,
+      detail: `${f.noteRate.toFixed(1)} notas/s vs ${a.noteRate[0]}-${a.noteRate[1]}`,
+    },
+    {
+      key: 'noteDur',
+      label: 'Duracao das notas',
+      score: logRangeScore(Math.max(f.noteDurationMean, 0.004), a.noteDurationSec, 0.85),
+      weight: 2.4,
+      detail: `${(f.noteDurationMean * 1000).toFixed(0)} ms vs ${(a.noteDurationSec[0] * 1000).toFixed(0)}-${(
+        a.noteDurationSec[1] * 1000
+      ).toFixed(0)} ms`,
+    },
+    {
+      key: 'tonality',
+      label: 'Timbre (puro x aspero)',
+      score: rangeScore(f.tonality, a.tonality, 0.7),
+      weight: 2.6,
+      detail: `${Math.round(f.tonality * 100)}% de pureza vs ${Math.round(a.tonality[0] * 100)}-${Math.round(
+        a.tonality[1] * 100,
+      )}%`,
+    },
+    {
+      key: 'fm',
+      label: 'Modulacao de frequencia',
+      score: rangeScore(f.fmDepth, a.fmDepth, 0.9),
+      weight: 1.8,
+      detail: `${Math.round(f.fmDepth * 100)}% vs ${Math.round(a.fmDepth[0] * 100)}-${Math.round(a.fmDepth[1] * 100)}%`,
+    },
+    {
+      key: 'phrase',
+      label: 'Duracao da frase',
+      score: logRangeScore(Math.max(f.phraseDurationSec, 0.05), a.phraseSec, 1.1),
+      weight: 1.1,
+      detail: `${f.phraseDurationSec.toFixed(1)} s vs ${a.phraseSec[0]}-${a.phraseSec[1]} s`,
+    },
+    {
+      key: 'motif',
+      label: 'Contorno melodico',
+      score: motifSimilarity(f, a.motif),
+      weight: 2.0,
+      detail: a.motif ? 'sequencia de alturas das notas alinhada no tempo' : 'sem motivo de referencia',
+    },
+    {
+      key: 'rhythm',
+      label: 'Padrao ritmico',
+      score: rhythmScore(f, species),
+      weight: 1.6,
+      detail: `esperado: ${a.rhythm}`,
+    },
+  ];
+
+  if (a.notesPerPhrase) {
+    const perPhrase = f.phrases.length ? f.noteCount / f.phrases.length : f.noteCount;
+    terms.push({
+      key: 'notes',
+      label: 'Notas por frase',
+      score: rangeScore(perPhrase, a.notesPerPhrase, 1.2),
+      weight: 1.2,
+      detail: `${perPhrase.toFixed(1)} vs ${a.notesPerPhrase[0]}-${a.notesPerPhrase[1]}`,
+    });
+  }
+
+  return { fit: weightedMean(terms), terms };
+}
+
 const SOFTMAX_TEMPERATURE = 0.055;
-/** abaixo disso nao ha aderencia suficiente pra afirmar especie alguma */
+/** abaixo desta aderencia nao ha nada na base parecido com o gravado */
 const INCONCLUSIVE_FIT = 0.52;
 
 export interface MatchOptions {
-  /** limita a busca a um subconjunto (ex.: filtro por regiao) */
+  /** limita a busca a um subconjunto */
   candidates?: Species[];
   topN?: number;
+  /** pistas de campo do usuario: reordenam sem eliminar ninguem */
+  context?: FieldContext;
 }
 
 export function matchSpecies(f: AcousticFeatures, options: MatchOptions = {}): MatchResult {
@@ -244,7 +261,9 @@ export function matchSpecies(f: AcousticFeatures, options: MatchOptions = {}): M
         .filter((t) => t.score < 0.5)
         .map((t) => ({ label: t.label, ok: false, detail: t.detail })),
     ];
-    return { species, fit, reasons };
+    // O contexto de campo entra como peso, nao como filtro: uma ave fora do
+    // habitat esperado recua na lista mas continua visivel.
+    return { species, fit: fit * contextWeight(species, options.context), reasons };
   });
 
   scored.sort((a, b) => b.fit - a.fit);

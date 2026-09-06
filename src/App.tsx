@@ -107,7 +107,12 @@ export default function App() {
             onChanged={() => void refresh()}
           />
         ) : tab === 'ouvir' ? (
-          <ListenPage settings={settings} onSaved={() => void refresh()} onOpenSpecies={goToSpecies} />
+          <ListenPage
+            settings={settings}
+            onSaved={() => void refresh()}
+            onOpenSpecies={goToSpecies}
+            onEnvironmentChange={(environment) => updateSettings({ ...settings, defaultEnvironment: environment })}
+          />
         ) : tab === 'foto' ? (
           <PhotoPage settings={settings} onSaved={() => void refresh()} onOpenSpecies={goToSpecies} />
         ) : tab === 'dex' ? (

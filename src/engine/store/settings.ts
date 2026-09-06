@@ -1,4 +1,8 @@
+import type { Environment } from '../../data/occurrence';
+
 export interface Settings {
+  /** ambiente onde o usuario costuma gravar; pre-seleciona a pista de campo */
+  defaultEnvironment?: Environment;
   /** usa a CNN local (MobileNet via CDN) para reforcar a identificacao por foto */
   useLocalCnn: boolean;
   /** endpoint e chave de um modelo em nuvem para identificacao assistida */
@@ -19,6 +23,7 @@ export interface Settings {
 const KEY = 'ornis:settings:v1';
 
 export const DEFAULT_SETTINGS: Settings = {
+  defaultEnvironment: undefined,
   useLocalCnn: false,
   cloudEnabled: false,
   cloudApiKey: '',

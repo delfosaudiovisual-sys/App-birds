@@ -170,13 +170,17 @@ describe('extracao de features', () => {
   it('mede estereotipia alta em notas identicas repetidas', () => {
     const same: ToneSpec[] = [];
     const varied: ToneSpec[] = [];
+    // As notas "variadas" precisam diferir em ALTURA, nao so em varredura:
+    // 2000->5000 e 2350->4700 tem o mesmo centro e sao, para efeito de
+    // repertorio, a mesma nota. Aqui cada nota ocupa uma regiao distinta.
+    const pitches = [1800, 4600, 2400, 6200, 3100, 5300, 2000, 7000];
     for (let i = 0; i < 8; i++) {
       same.push({ startSec: 0.15 + i * 0.35, durationSec: 0.18, freqStartHz: 3000, freqEndHz: 3600 });
       varied.push({
         startSec: 0.15 + i * 0.35,
         durationSec: 0.18,
-        freqStartHz: 2000 + i * 350,
-        freqEndHz: 5000 - i * 300,
+        freqStartHz: pitches[i],
+        freqEndHz: pitches[i] * (i % 2 === 0 ? 1.25 : 0.8),
       });
     }
     const a = extractFeatures(synth(3.2, same), SR).features;

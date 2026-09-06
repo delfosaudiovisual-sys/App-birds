@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc -b --noEmit false --emitDeclarationOnly false"
+    "typecheck": "tsc -b --noEmit false --emitDeclarationOnly false",
+    "bench": "vitest run --config vitest.bench.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",

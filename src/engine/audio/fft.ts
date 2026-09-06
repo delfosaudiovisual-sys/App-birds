@@ -108,3 +108,15 @@ export function nextPow2(v: number): number {
   while (p < v) p <<= 1;
   return p;
 }
+
+/**
+ * Potencia de 2 mais proxima de `v` (empate arredonda para cima).
+ * Usada para escolher a janela de analise: arredondar sempre para cima dobraria
+ * a janela em taxas de amostragem comuns e borraria notas curtas de trinado.
+ */
+export function nearestPow2(v: number): number {
+  const hi = nextPow2(v);
+  const lo = hi >> 1;
+  if (lo < 1) return hi;
+  return v - lo < hi - v ? lo : hi;
+}

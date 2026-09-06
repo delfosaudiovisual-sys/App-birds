@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { startRecording, encodeWav, decodeAudioFile, type RecorderHandle } from '../engine/audio/recorder';
-import { analyzeSong, metricsFrom, type SongAnalysis } from '../engine/analyze';
+import { analyzeSong, identifyFromFeatures, metricsFrom, type SongAnalysis } from '../engine/analyze';
+import type { Environment, FieldContext } from '../data/occurrence';
+import { FieldHints } from '../components/FieldHints';
 import { SONG_TYPES } from '../engine/audio/songType';
 import { drawSpectrogram } from '../engine/audio/render';
 import { newId, type Sighting } from '../engine/store/db';
@@ -16,6 +18,8 @@ interface Props {
   settings: Settings;
   onSaved: () => void;
   onOpenSpecies: (id: string) => void;
+  /** guarda o ambiente escolhido para nao repetir o toque na proxima gravacao */
+  onEnvironmentChange: (environment: Environment) => void;
 }
 
 /** Espectrograma ao vivo: rola da direita pra esquerda enquanto grava. */
@@ -68,7 +72,7 @@ function useLiveSpectrogram(handle: RecorderHandle | null, canvasRef: React.RefO
   }, [handle, canvasRef]);
 }
 
-export function ListenPage({ settings, onSaved, onOpenSpecies }: Props) {
+export function ListenPage({ settings, onSaved, onOpenSpecies, onEnvironmentChange }: Props) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [elapsed, setElapsed] = useState(0);
   const [level, setLevel] = useState(0);
@@ -77,6 +81,7 @@ export function ListenPage({ settings, onSaved, onOpenSpecies }: Props) {
   const [chosenSpecies, setChosenSpecies] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [context, setContext] = useState<FieldContext>({});
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
 
   const handleRef = useRef<RecorderHandle | null>(null);
@@ -87,6 +92,24 @@ export function ListenPage({ settings, onSaved, onOpenSpecies }: Props) {
   const fileInput = useRef<HTMLInputElement | null>(null);
 
   useLiveSpectrogram(liveHandle, liveCanvas);
+
+  // O ambiente costuma ser o mesmo entre gravacoes: pre-seleciona o que o
+  // usuario escolheu nos ajustes para ele nao repetir o toque toda vez.
+  useEffect(() => {
+    setContext((current) =>
+      current.environment === undefined && settings.defaultEnvironment
+        ? { ...current, environment: settings.defaultEnvironment }
+        : current,
+    );
+  }, [settings.defaultEnvironment]);
+
+  // Reidentifica sem refazer a FFT quando as pistas mudam.
+  const refined = useMemo(
+    () => (analysis ? identifyFromFeatures(analysis.features, context) : null),
+    [analysis, context],
+  );
+  const identification = refined?.identification ?? analysis?.identification ?? null;
+  const songTypeResult = refined?.songType ?? analysis?.songType ?? null;
 
   // Desenha o espectrograma final assim que o resultado aparece.
   useEffect(() => {
@@ -202,9 +225,10 @@ export function ListenPage({ settings, onSaved, onOpenSpecies }: Props) {
 
   const save = async () => {
     if (!analysis || !chosenSpecies) return;
-    const match = analysis.identification.matches.find((m) => m.species.id === chosenSpecies);
+    if (!identification || !songTypeResult) return;
+    const match = identification.matches.find((m) => m.species.id === chosenSpecies);
     const probabilities = Object.fromEntries(
-      analysis.songType.scores.map((s) => [s.type, Number(s.probability.toFixed(4))]),
+      songTypeResult.scores.map((s) => [s.type, Number(s.probability.toFixed(4))]),
     ) as Sighting['songTypeProbabilities'];
 
     const sighting: Sighting = {
@@ -212,18 +236,18 @@ export function ListenPage({ settings, onSaved, onOpenSpecies }: Props) {
       speciesId: chosenSpecies,
       kind: 'canto',
       timestamp: Date.now(),
-      confidence: analysis.identification.confidence,
+      confidence: identification.confidence,
       probability: match?.probability ?? 0,
-      alternatives: analysis.identification.matches
+      alternatives: identification.matches
         .filter((m) => m.species.id !== chosenSpecies)
         .map((m) => ({ speciesId: m.species.id, probability: Number(m.probability.toFixed(4)) })),
-      songType: analysis.songType.top.type,
+      songType: songTypeResult!.top.type,
       songTypeProbabilities: probabilities,
-      songTypeConfidence: analysis.songType.confidence,
+      songTypeConfidence: songTypeResult!.confidence,
       metrics: metricsFrom(analysis.features),
       thumbnail: analysis.thumbnail,
       audio: recordedRef.current ?? undefined,
-      verified: chosenSpecies !== analysis.identification.matches[0]?.species.id,
+      verified: chosenSpecies !== identification.matches[0]?.species.id,
     };
 
     setSaving(true);
@@ -240,8 +264,16 @@ export function ListenPage({ settings, onSaved, onOpenSpecies }: Props) {
     }
   };
 
-  const top = analysis?.identification.matches[0];
-  const songTypeInfo = analysis ? SONG_TYPES[analysis.songType.top.type] : null;
+  // Quando as pistas mudam o topo muda: acompanha a selecao automaticamente,
+  // a menos que o usuario ja tenha escolhido manualmente outra especie.
+  const top = identification?.matches[0];
+  useEffect(() => {
+    if (!identification) return;
+    const stillListed = identification.matches.some((m) => m.species.id === chosenSpecies);
+    if (!stillListed) setChosenSpecies(identification.matches[0]?.species.id ?? null);
+  }, [identification, chosenSpecies]);
+
+  const songTypeInfo = songTypeResult ? SONG_TYPES[songTypeResult.top.type] : null;
 
   return (
     <div>
@@ -344,10 +376,18 @@ export function ListenPage({ settings, onSaved, onOpenSpecies }: Props) {
             </div>
           </div>
 
-          {analysis.identification.inconclusive ? (
+          <FieldHints
+            value={context}
+            onChange={(next) => {
+              setContext(next);
+              if (next.environment) onEnvironmentChange(next.environment);
+            }}
+          />
+
+          {identification && identification.inconclusive ? (
             <Notice>
               Nao consegui casar este canto com nenhuma especie da base.{' '}
-              {analysis.identification.notes.join(' ')}
+              {identification?.notes.join(' ')}
             </Notice>
           ) : (
             top && (
@@ -386,12 +426,12 @@ export function ListenPage({ settings, onSaved, onOpenSpecies }: Props) {
                 <div className="card__title">Por que</div>
                 <EvidenceList items={top.reasons} />
 
-                {analysis.identification.matches.length > 1 && (
+                {identification && identification.matches.length > 1 && (
                   <>
                     <hr className="divider" />
                     <div className="card__title">Nao e essa? Corrija</div>
                     <div className="stack">
-                      {analysis.identification.matches.map((m) => (
+                      {identification?.matches.map((m) => (
                         <button
                           key={m.species.id}
                           type="button"
@@ -437,7 +477,7 @@ export function ListenPage({ settings, onSaved, onOpenSpecies }: Props) {
                 <div>
                   <div style={{ fontSize: 17, fontWeight: 700 }}>{songTypeInfo.label}</div>
                   <div className="tiny dim">
-                    confianca da leitura funcional: {Math.round(analysis.songType.confidence * 100)}%
+                    confianca da leitura funcional: {Math.round(songTypeResult!.confidence * 100)}%
                   </div>
                 </div>
               </div>
@@ -445,7 +485,7 @@ export function ListenPage({ settings, onSaved, onOpenSpecies }: Props) {
               <p className="small muted">{songTypeInfo.description}</p>
 
               <div className="stack" style={{ marginTop: 12 }}>
-                {analysis.songType.scores.map((score) => {
+                {songTypeResult!.scores.map((score) => {
                   const info = SONG_TYPES[score.type];
                   return (
                     <Meter
@@ -461,16 +501,16 @@ export function ListenPage({ settings, onSaved, onOpenSpecies }: Props) {
               <hr className="divider" />
               <div className="card__title">Evidencia acustica</div>
               <EvidenceList
-                items={analysis.songType.top.evidence.map((e) => ({
+                items={songTypeResult!.top.evidence.map((e) => ({
                   label: e.label,
                   ok: e.weight > 0,
                   detail: e.measured,
                 }))}
               />
 
-              {analysis.songType.caveats.length > 0 && (
+              {songTypeResult!.caveats.length > 0 && (
                 <div style={{ marginTop: 12 }}>
-                  <Notice>{analysis.songType.caveats.join(' ')}</Notice>
+                  <Notice>{songTypeResult!.caveats.join(' ')}</Notice>
                 </div>
               )}
 

@@ -1,5 +1,6 @@
 import { extractFeatures, type AcousticFeatures } from './audio/features';
 import { matchSpecies, type MatchResult } from './audio/matcher';
+import type { FieldContext } from '../data/occurrence';
 import { classifySongType, type SongTypeResult } from './audio/songType';
 import { analysisWindow } from './audio/recorder';
 import { spectrogramThumbnail } from './audio/render';
@@ -27,14 +28,28 @@ export interface SongAnalysis {
  * A ordem importa: a especie e identificada primeiro porque o prior de
  * repertorio dela entra na classificacao funcional como desempate.
  */
-export function analyzeSong(samples: Float32Array, sampleRate: number): SongAnalysis {
+/**
+ * Reidentifica a partir das caracteristicas ja extraidas.
+ *
+ * Separado da analise porque as pistas de campo (ambiente, tamanho) mudam
+ * durante a leitura do resultado, e refazer a FFT a cada toque de chip seria
+ * desperdicio: o casamento custa menos de um milissegundo, a FFT custa dezenas.
+ */
+export function identifyFromFeatures(
+  features: AcousticFeatures,
+  context?: FieldContext,
+): { identification: MatchResult; songType: SongTypeResult } {
+  const identification = matchSpecies(features, { context });
+  const best = identification.inconclusive ? undefined : identification.matches[0]?.species;
+  return { identification, songType: classifySongType(features, best?.songTypePrior) };
+}
+
+export function analyzeSong(samples: Float32Array, sampleRate: number, context?: FieldContext): SongAnalysis {
   const started = typeof performance !== 'undefined' ? performance.now() : Date.now();
   const window = analysisWindow(sampleRate);
   const { features, spectrogram } = extractFeatures(samples, sampleRate, window);
 
-  const identification = matchSpecies(features);
-  const best = identification.inconclusive ? undefined : identification.matches[0]?.species;
-  const songType = classifySongType(features, best?.songTypePrior);
+  const { identification, songType } = identifyFromFeatures(features, context);
 
   const ended = typeof performance !== 'undefined' ? performance.now() : Date.now();
 

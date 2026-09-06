@@ -4,7 +4,7 @@ export interface Note {
   startSec: number;
   endSec: number;
   durationSec: number;
-  /** contorno de frequencia dominante, um valor por frame do frame da nota */
+  /** contorno de frequencia dominante, um valor por frame da nota */
   contour: number[];
   peakHz: number;
   lowHz: number;
@@ -16,6 +16,14 @@ export interface Note {
   amplitude: number;
   /** subida (>0) ou descida (<0) media de frequencia, em Hz/s */
   sweepHzPerSec: number;
+}
+
+/** Grupo de notas separado dos vizinhos por um silencio longo. */
+export interface Phrase {
+  startSec: number;
+  endSec: number;
+  durationSec: number;
+  noteCount: number;
 }
 
 export interface AcousticFeatures {
@@ -55,10 +63,12 @@ export interface AcousticFeatures {
   stereotypy: number;
   /** 0-1, quantos tipos distintos de nota (repertorio dentro do trecho) */
   noteDiversity: number;
-  /** 0-1, forca da periodicidade de frase no envelope */
+  /** 0-1, forca da repeticao de frase */
   phraseRepetition: number;
   /** duracao media da frase detectada, em segundos */
   phraseDurationSec: number;
+  /** frases detectadas no trecho */
+  phrases: Phrase[];
 
   /** 0-1, quao abrupto e o ataque das notas */
   onsetSharpness: number;
@@ -88,6 +98,10 @@ function mean(values: ArrayLike<number>): number {
   return s / values.length;
 }
 
+function median(values: ArrayLike<number>): number {
+  return percentile(values, 0.5);
+}
+
 function stddev(values: ArrayLike<number>): number {
   if (values.length < 2) return 0;
   const m = mean(values);
@@ -97,34 +111,99 @@ function stddev(values: ArrayLike<number>): number {
 }
 
 /** Frequencia do pico com interpolacao parabolica entre bins vizinhos. */
-function refinedPeak(row: Float32Array, binFreqs: Float32Array): { hz: number; mag: number; index: number } {
+function refinedPeak(row: Float32Array, binFreqs: Float32Array): { hz: number; mag: number } {
   let best = 0;
   for (let b = 1; b < row.length; b++) if (row[b] > row[best]) best = b;
   const mag = row[best];
   if (best <= 0 || best >= row.length - 1 || mag <= 0) {
-    return { hz: binFreqs[best] ?? 0, mag, index: best };
+    return { hz: binFreqs[best] ?? 0, mag };
   }
   const a = row[best - 1];
   const c = row[best + 1];
   const denom = a - 2 * mag + c;
   const shift = denom === 0 ? 0 : (0.5 * (a - c)) / denom;
   const step = binFreqs[1] - binFreqs[0];
-  return { hz: binFreqs[best] + shift * step, mag, index: best };
+  return { hz: binFreqs[best] + shift * step, mag };
 }
 
-/** Achatamento espectral (media geometrica / media aritmetica). 1 = ruido. */
-function spectralFlatness(row: Float32Array): number {
-  let logSum = 0;
-  let sum = 0;
-  let n = 0;
+/**
+ * Quantis de energia acumulada: as frequencias que delimitam os 90% centrais da
+ * energia do frame.
+ *
+ * Substitui a contagem de bins acima de um limiar, que inflava a banda porque
+ * qualquer harmonico fraco entrava com o mesmo peso de um pico forte. Quantil
+ * de energia e a medida usada em bioacustica justamente por isso.
+ */
+const BAND_MASK_DB = -30;
+
+function energyBand(row: Float32Array, binFreqs: Float32Array): { low: number; high: number } {
+  let peak = 0;
+  for (let b = 0; b < row.length; b++) if (row[b] > peak) peak = row[b];
+  if (peak <= 0) return { low: 0, high: 0 };
+
+  // So bins a menos de 30 dB abaixo do pico do frame entram na conta. Sem essa
+  // mascara o piso de ruido, espalhado por centenas de bins, empurra o quantil
+  // de 95% ate o topo da banda e todo canto "ocupa" 12 kHz.
+  const threshold = peak * 10 ** (BAND_MASK_DB / 20);
+
+  let total = 0;
+  for (let b = 0; b < row.length; b++) if (row[b] >= threshold) total += row[b] * row[b];
+  if (total <= 0) return { low: 0, high: 0 };
+
+  const lowTarget = total * 0.05;
+  const highTarget = total * 0.95;
+  let acc = 0;
+  let low = binFreqs[0];
+  let high = binFreqs[binFreqs.length - 1];
+  let lowSet = false;
   for (let b = 0; b < row.length; b++) {
-    const v = row[b] + 1e-9;
-    logSum += Math.log(v);
-    sum += v;
-    n++;
+    if (row[b] < threshold) continue;
+    acc += row[b] * row[b];
+    if (!lowSet && acc >= lowTarget) {
+      low = binFreqs[b];
+      lowSet = true;
+    }
+    if (acc >= highTarget) {
+      high = binFreqs[b];
+      break;
+    }
   }
-  if (n === 0 || sum === 0) return 1;
-  return Math.exp(logSum / n) / (sum / n);
+  return { low, high: Math.max(high, low) };
+}
+
+/**
+ * Concentracao espectral: fracao da energia do frame que cabe nos 4% de bins
+ * mais fortes. Um assobio puro concentra quase tudo; ruido branco espalha.
+ *
+ * Substitui o achatamento espectral escalado a mao, que saturava em 0 para
+ * qualquer som com serie harmonica — ou seja, para quase todo canto de ave.
+ */
+function spectralConcentration(row: Float32Array): number {
+  const n = row.length;
+  if (n === 0) return 0;
+  let total = 0;
+  for (let b = 0; b < n; b++) total += row[b] * row[b];
+  if (total <= 0) return 0;
+
+  const keep = Math.max(1, Math.round(n * 0.04));
+  const powers = new Float64Array(n);
+  for (let b = 0; b < n; b++) powers[b] = row[b] * row[b];
+  powers.sort();
+  let top = 0;
+  for (let i = n - keep; i < n; i++) top += powers[i];
+  return top / total;
+}
+
+/**
+ * Mapeia concentracao espectral para 0-1.
+ *
+ * Os pontos de ancoragem foram MEDIDOS neste mesmo pipeline (ver calib.test.ts):
+ * ruido de banda larga fica em ~0.17 e um assobio puro em ~0.85. A faixa e um
+ * pouco mais larga que a medida para o valor nao saturar em 1 num canto real,
+ * que fica entre os dois extremos.
+ */
+function concentrationToTonality(concentration: number): number {
+  return clamp01((concentration - 0.15) / 0.75);
 }
 
 function spectralEntropy(row: Float32Array): number {
@@ -139,10 +218,7 @@ function spectralEntropy(row: Float32Array): number {
   return h / Math.log(row.length);
 }
 
-/**
- * Mede quanto da energia cai em multiplos inteiros da fundamental.
- * Sabias e canarios tem pilha harmonica limpa; chiados de bem-te-vi nao.
- */
+/** Fracao da energia que cai em multiplos inteiros da fundamental. */
 function harmonicRatio(row: Float32Array, binFreqs: Float32Array, f0: number): number {
   if (f0 <= 0) return 0;
   const step = binFreqs[1] - binFreqs[0];
@@ -152,8 +228,7 @@ function harmonicRatio(row: Float32Array, binFreqs: Float32Array, f0: number): n
   for (let b = 0; b < row.length; b++) total += row[b];
   if (total <= 0) return 0;
   for (let k = 1; k <= 6; k++) {
-    const target = f0 * k;
-    const idx = Math.round((target - base) / step);
+    const idx = Math.round((f0 * k - base) / step);
     if (idx < 0 || idx >= row.length) continue;
     for (let d = -1; d <= 1; d++) {
       const i = idx + d;
@@ -169,18 +244,22 @@ interface Segment {
 }
 
 /**
- * Segmenta notas pelo envelope de energia com histerese (limiar alto pra abrir,
- * baixo pra fechar). Histerese evita picotar uma nota longa que oscila em volta
- * de um limiar unico.
+ * Segmenta notas pelo envelope de energia com histerese (limiar alto para
+ * abrir, baixo para fechar), evitando picotar uma nota longa que oscila.
+ *
+ * Os limites de fusao e de duracao minima sao curtos de proposito: um trinado
+ * de corruira tem notas de 35 ms separadas por 15 ms de silencio, e uma fusao
+ * generosa transformaria a frase inteira numa nota so — foi exatamente o que
+ * acontecia antes.
  */
 function segmentNotes(env: Float32Array, hopSeconds: number): Segment[] {
   if (env.length === 0) return [];
   const noiseFloor = percentile(env, 0.2);
   const peak = percentile(env, 0.98);
-  if (peak <= noiseFloor * 1.2) return [];
+  if (peak <= noiseFloor * 1.15) return [];
 
-  const openAt = noiseFloor + (peak - noiseFloor) * 0.28;
-  const closeAt = noiseFloor + (peak - noiseFloor) * 0.14;
+  const openAt = noiseFloor + (peak - noiseFloor) * 0.3;
+  const closeAt = noiseFloor + (peak - noiseFloor) * 0.15;
 
   const segments: Segment[] = [];
   let start = -1;
@@ -193,10 +272,8 @@ function segmentNotes(env: Float32Array, hopSeconds: number): Segment[] {
   }
   if (start >= 0) segments.push({ start, end: env.length - 1 });
 
-  // Funde notas separadas por menos de 25 ms (sao a mesma silaba) e
-  // descarta cliques com menos de 12 ms.
-  const gapFrames = Math.max(1, Math.round(0.025 / hopSeconds));
-  const minFrames = Math.max(1, Math.round(0.012 / hopSeconds));
+  const gapFrames = Math.max(1, Math.round(0.008 / hopSeconds));
+  const minFrames = Math.max(1, Math.round(0.007 / hopSeconds));
   const merged: Segment[] = [];
   for (const seg of segments) {
     const last = merged[merged.length - 1];
@@ -204,6 +281,46 @@ function segmentNotes(env: Float32Array, hopSeconds: number): Segment[] {
     else merged.push({ ...seg });
   }
   return merged.filter((s) => s.end - s.start >= minFrames);
+}
+
+/**
+ * Agrupa notas em frases: um silencio muito maior que o intervalo tipico entre
+ * notas marca o fim de uma frase.
+ *
+ * Medir a frase por agrupamento, e nao por autocorrelacao do envelope, foi o
+ * que consertou a duracao de frase — a autocorrelacao travava no periodo
+ * entre NOTAS, que e uma ordem de grandeza menor que o periodo entre FRASES.
+ */
+function groupPhrases(notes: Note[]): Phrase[] {
+  if (notes.length === 0) return [];
+  if (notes.length === 1) {
+    const n = notes[0];
+    return [{ startSec: n.startSec, endSec: n.endSec, durationSec: n.durationSec, noteCount: 1 }];
+  }
+
+  const gaps: number[] = [];
+  for (let i = 1; i < notes.length; i++) gaps.push(notes[i].startSec - notes[i - 1].endSec);
+  const typical = median(gaps);
+  const boundary = Math.max(0.25, typical * 3);
+
+  const phrases: Phrase[] = [];
+  let startIdx = 0;
+  for (let i = 1; i <= notes.length; i++) {
+    const isLast = i === notes.length;
+    const gap = isLast ? Infinity : notes[i].startSec - notes[i - 1].endSec;
+    if (gap > boundary) {
+      const first = notes[startIdx];
+      const last = notes[i - 1];
+      phrases.push({
+        startSec: first.startSec,
+        endSec: last.endSec,
+        durationSec: last.endSec - first.startSec,
+        noteCount: i - startIdx,
+      });
+      startIdx = i;
+    }
+  }
+  return phrases;
 }
 
 /** Correlacao de Pearson entre dois contornos reamostrados. */
@@ -241,150 +358,166 @@ export function resample(values: number[], n: number): number[] {
   return out;
 }
 
-/** Autocorrelacao normalizada do envelope: acha periodicidade de frase. */
-function envelopePeriodicity(env: Float32Array, hopSeconds: number): { strength: number; periodSec: number } {
-  const n = env.length;
-  if (n < 16) return { strength: 0, periodSec: 0 };
-  const m = mean(env);
-  const centered = new Float32Array(n);
-  for (let i = 0; i < n; i++) centered[i] = env[i] - m;
-
-  let zeroLag = 0;
-  for (let i = 0; i < n; i++) zeroLag += centered[i] * centered[i];
-  if (zeroLag <= 0) return { strength: 0, periodSec: 0 };
-
-  const minLag = Math.max(2, Math.round(0.12 / hopSeconds));
-  const maxLag = Math.min(n - 2, Math.round(4.0 / hopSeconds));
-  let bestLag = 0;
-  let bestVal = 0;
-  for (let lag = minLag; lag <= maxLag; lag++) {
-    let acc = 0;
-    for (let i = 0; i + lag < n; i++) acc += centered[i] * centered[i + lag];
-    const norm = acc / zeroLag;
-    if (norm > bestVal) {
-      bestVal = norm;
-      bestLag = lag;
-    }
-  }
-  return { strength: Math.max(0, Math.min(1, bestVal)), periodSec: bestLag * hopSeconds };
-}
-
 export interface ExtractOptions {
-  fftSize?: number;
-  hopSize?: number;
+  /** janela curta, para segmentacao e ritmo */
+  timeFftSize?: number;
+  timeHopSize?: number;
+  /** janela longa, para altura e timbre */
+  freqFftSize?: number;
+  freqHopSize?: number;
 }
 
+/**
+ * Extrai as caracteristicas acusticas em DUAS resolucoes.
+ *
+ * Uma janela so nao serve: para separar as notas de 35 ms de um trinado e
+ * preciso resolucao temporal fina (janela curta), e para medir a altura de um
+ * arrulho de 500 Hz e preciso resolucao de frequencia fina (janela longa).
+ * Com uma janela intermediaria as duas medidas saem erradas ao mesmo tempo.
+ */
 export function extractFeatures(
   samples: Float32Array,
   sampleRate: number,
   options: ExtractOptions = {},
 ): { features: AcousticFeatures; spectrogram: Spectrogram } {
-  const raw = computeSpectrogram(samples, sampleRate, {
-    fftSize: options.fftSize ?? 1024,
-    hopSize: options.hopSize ?? 256,
-  });
-  const spec = denoise(raw);
-  const env = energyEnvelope(spec);
-  const hop = spec.hopSeconds;
+  const timeFft = options.timeFftSize ?? 512;
+  const timeHop = options.timeHopSize ?? Math.max(32, timeFft / 4);
+  const freqFft = options.freqFftSize ?? 2048;
+  const freqHop = options.freqHopSize ?? Math.max(64, freqFft / 4);
+
+  // A subtracao por mediana e boa para ACHAR notas (remove o fundo estacionario)
+  // e ruim para MEDIR timbre: ela zera justamente a componente estavel de um
+  // assobio sustentado. Por isso a segmentacao usa o espectro tratado e as
+  // medidas espectrais usam o cru, protegidas pela mascara de banda.
+  const timeSpec = denoise(computeSpectrogram(samples, sampleRate, { fftSize: timeFft, hopSize: timeHop }));
+  const freqSpec = computeSpectrogram(samples, sampleRate, { fftSize: freqFft, hopSize: freqHop });
+  const freqSpecDisplay = denoise(freqSpec);
+
+  const env = energyEnvelope(timeSpec);
+  const hop = timeSpec.hopSeconds;
   const totalDuration = samples.length / sampleRate;
 
-  const frames = spec.magnitudes.length;
-  if (frames === 0) {
-    return { features: emptyFeatures(totalDuration), spectrogram: spec };
+  if (timeSpec.magnitudes.length === 0 || freqSpec.magnitudes.length === 0) {
+    return { features: emptyFeatures(totalDuration), spectrogram: freqSpecDisplay };
   }
 
   const segments = segmentNotes(env, hop);
-  const voicedFrames = new Set<number>();
-  for (const seg of segments) for (let i = seg.start; i <= seg.end; i++) voicedFrames.add(i);
-
-  // ---- medidas espectrais somente nos frames com voz ----
-  const peakHzPerFrame: number[] = [];
-  const flatnessPerFrame: number[] = [];
-  const entropyPerFrame: number[] = [];
-  const harmonicPerFrame: number[] = [];
-  const centroidPerFrame: number[] = [];
-  const energyWeightedFreqs: number[] = [];
-
-  for (const f of voicedFrames) {
-    const row = spec.magnitudes[f];
-    const { hz, mag } = refinedPeak(row, spec.binFreqs);
-    if (mag <= 0) continue;
-    peakHzPerFrame.push(hz);
-    flatnessPerFrame.push(spectralFlatness(row));
-    entropyPerFrame.push(spectralEntropy(row));
-    harmonicPerFrame.push(harmonicRatio(row, spec.binFreqs, hz));
-
-    let num = 0;
-    let den = 0;
-    let rowPeak = 0;
-    for (let b = 0; b < row.length; b++) if (row[b] > rowPeak) rowPeak = row[b];
-    for (let b = 0; b < row.length; b++) {
-      num += spec.binFreqs[b] * row[b];
-      den += row[b];
-      // bins acima de -20 dB do pico do frame definem a banda ocupada
-      if (row[b] > rowPeak * 0.1) energyWeightedFreqs.push(spec.binFreqs[b]);
-    }
-    centroidPerFrame.push(den > 0 ? num / den : 0);
-  }
 
   const noiseFloor = percentile(env, 0.2) + 1e-9;
   const signalLevel = percentile(env, 0.95);
   const snrDb = 20 * Math.log10(Math.max(signalLevel, 1e-9) / noiseFloor);
-
-  // ---- notas ----
   const envPeak = Math.max(...Array.from(env), 1e-9);
+
+  // Indice do frame da janela LONGA que cobre um instante dado.
+  const freqFrameAt = (sec: number) =>
+    Math.max(0, Math.min(freqSpec.magnitudes.length - 1, Math.round(sec / freqSpec.hopSeconds)));
+
   const notes: Note[] = segments.map((seg) => {
+    const startSec = seg.start * hop;
+    const endSec = (seg.end + 1) * hop;
+    const durationSec = endSec - startSec;
+
     const contour: number[] = [];
-    const flatness: number[] = [];
-    let amp = 0;
-    const freqs: number[] = [];
-    for (let f = seg.start; f <= seg.end; f++) {
-      const row = spec.magnitudes[f];
-      const { hz, mag } = refinedPeak(row, spec.binFreqs);
-      if (mag > 0) {
-        contour.push(hz);
-        flatness.push(spectralFlatness(row));
-        let rowPeak = 0;
-        for (let b = 0; b < row.length; b++) if (row[b] > rowPeak) rowPeak = row[b];
-        for (let b = 0; b < row.length; b++) if (row[b] > rowPeak * 0.1) freqs.push(spec.binFreqs[b]);
-      }
-      amp = Math.max(amp, env[f]);
+    const concentrations: number[] = [];
+    const lows: number[] = [];
+    const highs: number[] = [];
+
+    const from = freqFrameAt(startSec);
+    const to = freqFrameAt(endSec);
+    for (let f = from; f <= to; f++) {
+      const row = freqSpec.magnitudes[f];
+      const { hz, mag } = refinedPeak(row, freqSpec.binFreqs);
+      if (mag <= 0) continue;
+      contour.push(hz);
+      concentrations.push(spectralConcentration(row));
+      const band = energyBand(row, freqSpec.binFreqs);
+      lows.push(band.low);
+      highs.push(band.high);
     }
-    const durationSec = (seg.end - seg.start + 1) * hop;
-    const low = freqs.length ? percentile(freqs, 0.05) : 0;
-    const high = freqs.length ? percentile(freqs, 0.95) : 0;
+
+    let amp = 0;
+    for (let f = seg.start; f <= seg.end; f++) amp = Math.max(amp, env[f]);
+
+    const low = lows.length ? percentile(lows, 0.2) : 0;
+    const high = highs.length ? percentile(highs, 0.8) : 0;
     const sweep = contour.length > 1 ? (contour[contour.length - 1] - contour[0]) / durationSec : 0;
+
     return {
-      startSec: seg.start * hop,
-      endSec: (seg.end + 1) * hop,
+      startSec,
+      endSec,
       durationSec,
       contour,
-      peakHz: contour.length ? percentile(contour, 0.5) : 0,
+      peakHz: contour.length ? median(contour) : 0,
       lowHz: low,
       highHz: high,
       bandwidthHz: Math.max(0, high - low),
-      tonality: flatness.length ? 1 - Math.min(1, mean(flatness) * 3) : 0,
+      tonality: concentrations.length ? concentrationToTonality(mean(concentrations)) : 0,
       amplitude: amp / envPeak,
       sweepHzPerSec: sweep,
     };
   });
 
+  // ---- medidas espectrais globais, so nos frames com voz ----
+  const voicedFreqFrames = new Set<number>();
+  for (const note of notes) {
+    for (let f = freqFrameAt(note.startSec); f <= freqFrameAt(note.endSec); f++) voicedFreqFrames.add(f);
+  }
+
+  const peakHzPerFrame: number[] = [];
+  const concentrationPerFrame: number[] = [];
+  const entropyPerFrame: number[] = [];
+  const harmonicPerFrame: number[] = [];
+  const centroidPerFrame: number[] = [];
+  const lowPerFrame: number[] = [];
+  const highPerFrame: number[] = [];
+
+  for (const f of voicedFreqFrames) {
+    const row = freqSpec.magnitudes[f];
+    const { hz, mag } = refinedPeak(row, freqSpec.binFreqs);
+    if (mag <= 0) continue;
+    peakHzPerFrame.push(hz);
+    concentrationPerFrame.push(spectralConcentration(row));
+    entropyPerFrame.push(spectralEntropy(row));
+    harmonicPerFrame.push(harmonicRatio(row, freqSpec.binFreqs, hz));
+
+    const band = energyBand(row, freqSpec.binFreqs);
+    lowPerFrame.push(band.low);
+    highPerFrame.push(band.high);
+
+    let num = 0;
+    let den = 0;
+    for (let b = 0; b < row.length; b++) {
+      num += freqSpec.binFreqs[b] * row[b];
+      den += row[b];
+    }
+    centroidPerFrame.push(den > 0 ? num / den : 0);
+  }
+
   const voicedSec = notes.reduce((s, n) => s + n.durationSec, 0);
   const dutyCycle = totalDuration > 0 ? Math.min(1, voicedSec / totalDuration) : 0;
 
-  // Taxa de notas medida dentro da janela cantada (do inicio da 1a ao fim da
-  // ultima), nao sobre a gravacao inteira: 3 s de silencio no fim nao devem
-  // transformar um trinado em canto lento.
-  const spanSec =
-    notes.length > 1 ? notes[notes.length - 1].endSec - notes[0].startSec : notes[0]?.durationSec ?? 0;
-  const noteRate = spanSec > 0 && notes.length > 1 ? (notes.length - 1) / spanSec : notes.length ? 1 / Math.max(0.2, notes[0].durationSec) : 0;
+  const phrases = groupPhrases(notes);
+
+  // A taxa de notas e medida DENTRO das frases: silencio entre frases nao pode
+  // transformar um trinado rapido em canto lento.
+  const phraseNoteSpan = phrases.reduce((s, p) => s + p.durationSec, 0);
+  const phraseNotes = phrases.reduce((s, p) => s + p.noteCount, 0);
+  const noteRate =
+    phraseNoteSpan > 0.05 && phraseNotes > 1
+      ? (phraseNotes - phrases.length) / phraseNoteSpan
+      : notes.length
+        ? 1 / Math.max(0.2, notes[0].durationSec)
+        : 0;
 
   const intervals: number[] = [];
-  for (let i = 1; i < notes.length; i++) intervals.push(notes[i].startSec - notes[i - 1].startSec);
+  for (let i = 1; i < notes.length; i++) {
+    const gap = notes[i].startSec - notes[i - 1].startSec;
+    // ignora o salto entre frases, que nao e ritmo e sim pausa
+    if (gap < 0.6) intervals.push(gap);
+  }
   const intervalMean = mean(intervals);
   const rhythmIrregularity = intervalMean > 0 ? Math.min(1, stddev(intervals) / intervalMean) : 0;
 
-  // Trinado = rapido E regular. Um bando barulhento e rapido, mas irregular.
   const rateScore = clamp01((noteRate - 6) / 10);
   const trillIndex = notes.length >= 4 ? rateScore * (1 - Math.min(1, rhythmIrregularity * 1.6)) : 0;
 
@@ -410,7 +543,7 @@ export function extractFeatures(
   const fmDepth = fmCount ? fmDepthAcc / fmCount : 0;
   const fmRateHz = fmCount ? fmRateAcc / fmCount : 0;
 
-  // ---- estereotipia e diversidade de notas ----
+  // ---- estereotipia, repertorio e repeticao de frase ----
   let stereotypy = 0;
   let noteDiversity = 0;
   if (notes.length >= 2) {
@@ -418,8 +551,6 @@ export function extractFeatures(
     for (let i = 1; i < notes.length; i++) sims.push(contourSimilarity(notes[i - 1].contour, notes[i].contour));
     stereotypy = clamp01(mean(sims));
 
-    // Agrupa notas por similaridade de contorno + frequencia; o numero de
-    // grupos aproxima o tamanho do repertorio usado no trecho.
     const clusters: number[][] = [];
     notes.forEach((note, idx) => {
       const found = clusters.find((c) => {
@@ -433,7 +564,28 @@ export function extractFeatures(
     noteDiversity = clamp01((clusters.length - 1) / Math.max(1, Math.min(notes.length, 12) - 1));
   }
 
-  const periodicity = envelopePeriodicity(env, hop);
+  // Repeticao de frase = quanto as frases consecutivas se parecem, comparando
+  // o desenho de altura de cada uma. E o que caracteriza canto territorial.
+  let phraseRepetition = 0;
+  if (phrases.length >= 2) {
+    const contours = phrases.map((p) =>
+      notes.filter((n) => n.startSec >= p.startSec - 1e-6 && n.endSec <= p.endSec + 1e-6).flatMap((n) => n.contour),
+    );
+    const sims: number[] = [];
+    for (let i = 1; i < contours.length; i++) {
+      const durRatio =
+        Math.min(phrases[i].durationSec, phrases[i - 1].durationSec) /
+        Math.max(phrases[i].durationSec, phrases[i - 1].durationSec, 1e-6);
+      sims.push(contourSimilarity(contours[i - 1], contours[i]) * durRatio);
+    }
+    phraseRepetition = clamp01(mean(sims));
+  }
+
+  const phraseDurationSec = phrases.length
+    ? mean(phrases.map((p) => p.durationSec))
+    : notes.length
+      ? notes[notes.length - 1].endSec - notes[0].startSec
+      : 0;
 
   // ---- ataque e tendencia de amplitude ----
   let onsetAcc = 0;
@@ -461,7 +613,7 @@ export function extractFeatures(
     contourHigh > contourLow ? clamp01((hz - contourLow) / (contourHigh - contourLow)) : 0.5,
   );
 
-  const tonality = flatnessPerFrame.length ? clamp01(1 - mean(flatnessPerFrame) * 3) : 0;
+  const tonality = concentrationPerFrame.length ? concentrationToTonality(mean(concentrationPerFrame)) : 0;
   const signalQuality = clamp01(
     0.5 * clamp01((snrDb - 4) / 20) + 0.3 * clamp01(notes.length / 3) + 0.2 * clamp01(dutyCycle * 4),
   );
@@ -469,11 +621,11 @@ export function extractFeatures(
   const features: AcousticFeatures = {
     durationSec: totalDuration,
     dutyCycle,
-    peakHz: peakHzPerFrame.length ? percentile(peakHzPerFrame, 0.5) : 0,
-    lowHz: energyWeightedFreqs.length ? percentile(energyWeightedFreqs, 0.05) : 0,
-    highHz: energyWeightedFreqs.length ? percentile(energyWeightedFreqs, 0.95) : 0,
-    bandwidthHz: energyWeightedFreqs.length
-      ? Math.max(0, percentile(energyWeightedFreqs, 0.95) - percentile(energyWeightedFreqs, 0.05))
+    peakHz: peakHzPerFrame.length ? median(peakHzPerFrame) : 0,
+    lowHz: lowPerFrame.length ? percentile(lowPerFrame, 0.15) : 0,
+    highHz: highPerFrame.length ? percentile(highPerFrame, 0.85) : 0,
+    bandwidthHz: lowPerFrame.length
+      ? Math.max(0, percentile(highPerFrame, 0.85) - percentile(lowPerFrame, 0.15))
       : 0,
     centroidHz: centroidPerFrame.length ? mean(centroidPerFrame) : 0,
     tonality,
@@ -489,8 +641,9 @@ export function extractFeatures(
     fmRateHz,
     stereotypy,
     noteDiversity,
-    phraseRepetition: periodicity.strength,
-    phraseDurationSec: periodicity.periodSec || spanSec,
+    phraseRepetition,
+    phraseDurationSec,
+    phrases,
     onsetSharpness,
     amplitudeTrend,
     snrDb,
@@ -498,7 +651,7 @@ export function extractFeatures(
     melodyContour,
   };
 
-  return { features, spectrogram: spec };
+  return { features, spectrogram: freqSpecDisplay };
 }
 
 export function clamp01(v: number): number {
@@ -529,6 +682,7 @@ function emptyFeatures(durationSec: number): AcousticFeatures {
     noteDiversity: 0,
     phraseRepetition: 0,
     phraseDurationSec: 0,
+    phrases: [],
     onsetSharpness: 0,
     amplitudeTrend: 0,
     snrDb: 0,
