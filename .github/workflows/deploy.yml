@@ -1,0 +1,65 @@
+name: Publicar no GitHub Pages
+
+# Publica o app numa URL https, que e o que o iPhone exige para liberar o
+# microfone, o armazenamento local e a instalacao na Tela de Inicio. Aberto de
+# outra forma — arquivo local, http simples — o Safari bloqueia essas tres
+# coisas e o app perde justamente o que ele faz.
+on:
+  push:
+    branches:
+      - main
+      - claude/bird-song-identifier-app-vntziv
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Uma publicacao por vez, sem cancelar a que ja esta rodando: cancelar no meio
+# pode deixar o site publicado pela metade.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Verificar tipos e testes
+        run: |
+          npx tsc --noEmit -p tsconfig.json
+          npm test
+
+      - name: Build do app
+        run: npm run build
+
+      - name: Build do arquivo unico
+        run: |
+          npm run build:single
+          cp ornis.html dist/ornis.html
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

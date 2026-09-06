@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { clearAll, clearStoredPhotos, listStoredPhotos } from '../engine/store/db';
 import { resetPhotoFailures } from '../engine/photos/photoStore';
+import { downloadBackup, importBackup } from '../engine/store/backup';
 import { ENVIRONMENT_LABELS, type Environment } from '../data/occurrence';
 import type { Settings } from '../engine/store/settings';
 import { Notice, Switch } from '../components/ui';
-import { TrashIcon } from '../components/icons';
+import { useRef } from 'react';
+import { TrashIcon, UploadIcon } from '../components/icons';
 
 interface Props {
   settings: Settings;
@@ -16,6 +18,8 @@ interface Props {
 export function SettingsPage({ settings, onChange, onCleared, registered }: Props) {
   const [confirmClear, setConfirmClear] = useState(false);
   const [photoCount, setPhotoCount] = useState(0);
+  const [backupMessage, setBackupMessage] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
+  const importInput = useRef<HTMLInputElement | null>(null);
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange({ ...settings, [key]: value });
 
   useEffect(() => {
@@ -180,6 +184,63 @@ export function SettingsPage({ settings, onChange, onCleared, registered }: Prop
           Sai da rede apenas: a busca de fotos das especies (envia so o nome cientifico) e, se voce ligar, a
           identificacao assistida por foto.
         </p>
+        <div className="stack" style={{ marginBottom: 14 }}>
+          <button
+            type="button"
+            className="btn btn--block"
+            disabled={registered === 0}
+            onClick={async () => {
+              try {
+                const count = await downloadBackup();
+                setBackupMessage({ kind: 'info', text: `Backup gerado com ${count} registro(s).` });
+              } catch (err) {
+                setBackupMessage({
+                  kind: 'error',
+                  text: err instanceof Error ? err.message : 'Nao consegui gerar o backup.',
+                });
+              }
+            }}
+          >
+            Salvar backup da pokedex
+          </button>
+          <button type="button" className="btn btn--block" onClick={() => importInput.current?.click()}>
+            <UploadIcon />
+            Restaurar de um backup
+          </button>
+          <input
+            ref={importInput}
+            type="file"
+            accept="application/json,.json"
+            className="sr-only"
+            aria-label="Escolher arquivo de backup"
+            onChange={async (event) => {
+              const file = event.target.files?.[0];
+              event.target.value = '';
+              if (!file) return;
+              try {
+                const result = await importBackup(await file.text());
+                setBackupMessage({
+                  kind: 'info',
+                  text: `${result.imported} registro(s) restaurado(s)${
+                    result.skipped ? `, ${result.skipped} ignorado(s) por formato invalido` : ''
+                  }.`,
+                });
+                onCleared();
+              } catch (err) {
+                setBackupMessage({
+                  kind: 'error',
+                  text: err instanceof Error ? err.message : 'Nao consegui ler este arquivo.',
+                });
+              }
+            }}
+          />
+          <p className="field__hint" style={{ margin: 0 }}>
+            No iPhone, o Safari apaga os dados de um site que fica sete dias sem ser aberto. Guarde um backup de vez em
+            quando. O audio original nao entra no arquivo, para ele nao ficar grande demais.
+          </p>
+          {backupMessage && <Notice kind={backupMessage.kind}>{backupMessage.text}</Notice>}
+        </div>
+
         {confirmClear ? (
           <div className="stack">
             <Notice kind="error">Isso apaga toda a pokedex. Nao da para desfazer.</Notice>

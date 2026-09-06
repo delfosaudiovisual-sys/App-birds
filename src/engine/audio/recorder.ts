@@ -32,10 +32,32 @@ const RAW_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
 
 export async function startRecording(): Promise<RecorderHandle> {
   if (!navigator.mediaDevices?.getUserMedia) {
-    throw new Error('Este navegador nao permite acesso ao microfone.');
+    // A causa mais comum nao e navegador velho: e a pagina estar fora de um
+    // contexto seguro. O Safari so expoe mediaDevices em https ou localhost,
+    // entao um arquivo aberto direto do app Arquivos nunca vai gravar.
+    const insecure = typeof window !== 'undefined' && !window.isSecureContext;
+    throw new Error(
+      insecure
+        ? 'O microfone so funciona com o app aberto por https (ou localhost). Abrindo o arquivo direto no aparelho, o navegador bloqueia a gravacao.'
+        : 'Este navegador nao permite acesso ao microfone.',
+    );
   }
 
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: RAW_AUDIO_CONSTRAINTS });
+  // Safari do iOS rejeita alguns conjuntos de restricoes com
+  // OverconstrainedError em vez de simplesmente ignora-los. Sem esta queda para
+  // o pedido minimo, o app deixaria de gravar no iPhone — que e o aparelho onde
+  // ele mais vai ser usado. Vale mais um microfone com filtro de voz ligado do
+  // que microfone nenhum.
+  let stream: MediaStream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: RAW_AUDIO_CONSTRAINTS });
+  } catch (error) {
+    if (error instanceof DOMException && (error.name === 'OverconstrainedError' || error.name === 'NotFoundError')) {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } else {
+      throw error;
+    }
+  }
   const AudioCtx: typeof AudioContext =
     window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
   const context = new AudioCtx();

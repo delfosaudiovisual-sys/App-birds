@@ -11,7 +11,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -b --noEmit false --emitDeclarationOnly false",
-    "bench": "vitest run --config vitest.bench.ts"
+    "bench": "vitest run --config vitest.bench.ts",
+    "build:single": "tsc -b && vite build --config vite.singlefile.config.ts && node scripts/build-singlefile.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",
