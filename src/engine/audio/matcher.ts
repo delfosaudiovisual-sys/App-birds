@@ -2,6 +2,7 @@ import { ALL_SPECIES } from '../../data/species';
 import { contextWeight, type FieldContext } from '../../data/occurrence';
 import type { Range, Species } from '../../data/types';
 import { clamp01, resample, type AcousticFeatures } from './features';
+import { blendWithExemplar, matchExemplars, type Exemplar } from './exemplars';
 
 export interface SpeciesMatch {
   species: Species;
@@ -245,16 +246,36 @@ export interface MatchOptions {
   topN?: number;
   /** pistas de campo do usuario: reordenam sem eliminar ninguem */
   context?: FieldContext;
+  /** gravacoes que o usuario ja confirmou, usadas como referencia */
+  exemplars?: Exemplar[];
 }
 
 export function matchSpecies(f: AcousticFeatures, options: MatchOptions = {}): MatchResult {
   const pool = options.candidates ?? ALL_SPECIES;
   const topN = options.topN ?? 5;
 
+  // Exemplares do usuario: uma gravacao real e etiquetada descreve a ave muito
+  // melhor que qualquer faixa escrita a mao, entao ela entra como evidencia
+  // paralela ao perfil.
+  const exemplarMatches = options.exemplars?.length ? matchExemplars(f, options.exemplars) : undefined;
+
   const scored = pool.map((species) => {
-    const { fit, terms } = scoreSpecies(f, species);
+    const { fit: profileFit, terms } = scoreSpecies(f, species);
+    const exemplar = exemplarMatches?.get(species.id);
+    const fit = blendWithExemplar(profileFit, exemplar);
     const sorted = [...terms].sort((x, y) => y.score * y.weight - x.score * x.weight);
+    const learned =
+      exemplar && fit > profileFit
+        ? [
+            {
+              label: 'Parecido com gravacao sua',
+              ok: true,
+              detail: `${Math.round(exemplar.similarity * 100)}% de semelhanca com ${exemplar.count} registro(s) seu(s) — entra como desempate, nao decide sozinho`,
+            },
+          ]
+        : [];
     const reasons = [
+      ...learned,
       ...sorted.slice(0, 3).map((t) => ({ label: t.label, ok: t.score >= 0.6, detail: t.detail })),
       ...sorted
         .slice(-2)

@@ -1,6 +1,7 @@
 import type { AcousticFeatures } from './audio/features';
 import { matchSpecies, type MatchResult } from './audio/matcher';
 import type { FieldContext } from '../data/occurrence';
+import type { Exemplar } from './audio/exemplars';
 import { classifySongType, type SongTypeResult } from './audio/songType';
 import { identifySong, describeSource, type SourceCandidate } from './audio/identify';
 import { spectrogramThumbnail } from './audio/render';
@@ -52,8 +53,9 @@ export interface SongAnalysis {
 export function identifyFromFeatures(
   features: AcousticFeatures,
   context?: FieldContext,
+  exemplars?: Exemplar[],
 ): { identification: MatchResult; songType: SongTypeResult } {
-  const identification = matchSpecies(features, { context });
+  const identification = matchSpecies(features, { context, exemplars });
   const best = identification.inconclusive ? undefined : identification.matches[0]?.species;
   return { identification, songType: classifySongType(features, best?.songTypePrior) };
 }

@@ -6,7 +6,8 @@ import type { Environment, FieldContext } from '../data/occurrence';
 import { FieldHints } from '../components/FieldHints';
 import { SONG_TYPES } from '../engine/audio/songType';
 import { drawSpectrogram } from '../engine/audio/render';
-import { newId, type Sighting } from '../engine/store/db';
+import { listExemplars, newId, putExemplar, type Sighting } from '../engine/store/db';
+import { toVector, type Exemplar } from '../engine/audio/exemplars';
 import { persistSighting } from '../engine/store/capture';
 import type { Settings } from '../engine/store/settings';
 import { Badge, EvidenceList, Meter, Notice } from '../components/ui';
@@ -84,6 +85,7 @@ export function ListenPage({ settings, onSaved, onOpenSpecies, onEnvironmentChan
   const [saving, setSaving] = useState(false);
   const [context, setContext] = useState<FieldContext>({});
   const [excerpt, setExcerpt] = useState<number | null>(null);
+  const [exemplars, setExemplars] = useState<Exemplar[]>([]);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
 
   const handleRef = useRef<RecorderHandle | null>(null);
@@ -94,6 +96,13 @@ export function ListenPage({ settings, onSaved, onOpenSpecies, onEnvironmentChan
   const fileInput = useRef<HTMLInputElement | null>(null);
 
   useLiveSpectrogram(liveHandle, liveCanvas);
+
+  // Gravacoes que o usuario ja confirmou entram como referencia adicional.
+  useEffect(() => {
+    void listExemplars()
+      .then(setExemplars)
+      .catch(() => setExemplars([]));
+  }, []);
 
   // O ambiente costuma ser o mesmo entre gravacoes: pre-seleciona o que o
   // usuario escolheu nos ajustes para ele nao repetir o toque toda vez.
@@ -114,8 +123,8 @@ export function ListenPage({ settings, onSaved, onOpenSpecies, onEnvironmentChan
   }, [analysis, excerpt]);
 
   const refined = useMemo(
-    () => (activeFeatures ? identifyFromFeatures(activeFeatures, context) : null),
-    [activeFeatures, context],
+    () => (activeFeatures ? identifyFromFeatures(activeFeatures, context, exemplars) : null),
+    [activeFeatures, context, exemplars],
   );
   const identification = refined?.identification ?? analysis?.identification ?? null;
   const songTypeResult = refined?.songType ?? analysis?.songType ?? null;
@@ -263,6 +272,26 @@ export function ListenPage({ settings, onSaved, onOpenSpecies, onEnvironmentChan
     setSaving(true);
     try {
       await persistSighting(sighting, settings.saveLocation, onSaved);
+
+      // O registro guardado vira referencia para as proximas identificacoes.
+      // Vale mais quando o usuario CORRIGIU o palpite, mas confirmar tambem
+      // ensina: e uma gravacao real etiquetada por quem ouviu a ave.
+      if (activeFeatures && activeFeatures.noteCount >= 2 && activeFeatures.signalQuality > 0.3) {
+        const exemplar: Exemplar = {
+          id: sighting.id,
+          speciesId: chosenSpecies,
+          vector: toVector(activeFeatures),
+          createdAt: sighting.timestamp,
+          corrected: Boolean(sighting.verified),
+        };
+        try {
+          await putExemplar(exemplar);
+          setExemplars((current) => [...current, exemplar]);
+        } catch {
+          // sem armazenamento o registro principal ja foi salvo; segue sem aprender
+        }
+      }
+
       setSaved(true);
       onSaved();
     } catch (err) {

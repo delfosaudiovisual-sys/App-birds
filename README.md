@@ -97,6 +97,40 @@ Para acerto de campo só serve gravação real etiquetada. O valor da bancada é
 análise mais longa que as notas do trinado, tonalidade saturada em zero, banda contaminada por
 ruído) que nenhuma inspeção de código tinha pego.
 
+### Por que não há BirdNET aqui
+
+A pergunta óbvia é usar o BirdNET, o modelo de referência da área. Foi tentado e **não é possível no
+navegador**, por um motivo verificado, não suposto:
+
+O `BirdNET_6K_GLOBAL_MODEL.tflite` calcula o próprio espectrograma dentro do grafo, e essa camada usa
+`FlexRFFT` — um operador do delegate *Select TF ops*. Carregá-lo exige `dlopen`, ou seja, ligação
+dinâmica de biblioteca, que a build WebAssembly do TFLite não tem. O erro foi reproduzido:
+
+```
+Aborted(To use dlopen, you need enable dynamic linking)
+```
+
+As saídas também não existem: o BirdNET V2.4 é distribuído como SavedModel protobuf por um pacote
+Python, não há build para navegador em nenhum pacote npm, e converter exigiria o conversor do
+TensorFlow em Python. Rodar BirdNET exigiria um servidor — o que quebraria o funcionamento offline,
+que é a razão de o app existir.
+
+### O app aprende com as suas correções
+
+Cada gravação que você confirma ou corrige é guardada como um **exemplar**: um vetor de 12 medidas
+mais o desenho de altura. Identificações seguintes comparam também com esses exemplares.
+
+Isso entra como **bônus limitado, nunca como substituto** da comparação com os perfis, e o limite
+veio de medição: comparando gravações duas a duas, a semelhança entre a mesma espécie tem mediana
+0,60 e entre espécies diferentes chega a 0,83. As distribuições se sobrepõem. Se o exemplar pudesse
+decidir sozinho, uma espécie errada com semelhança alta sequestraria o resultado e o app pioraria
+quanto mais fosse usado.
+
+O banco de provas não consegue medir o ganho real desse recurso: o sintetizador sorteia valores
+novos em toda a faixa do perfil a cada gravação, o que exagera a variação dentro da espécie. Uma ave
+real canta de forma muito mais constante. O que o banco garante é o que importa — **usar o app não o
+deixa pior**.
+
 ## Honestidade sobre a precisão
 
 - **A espécie** é determinada por casamento de características acústicas contra perfis descritos

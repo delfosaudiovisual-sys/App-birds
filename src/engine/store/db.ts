@@ -28,12 +28,14 @@ export interface Sighting {
 }
 
 import type { PhotoAttribution } from '../photos/wikimedia';
+import type { Exemplar } from '../audio/exemplars';
 
 const DB_NAME = 'ornis';
-/** v2 acrescentou o armazem de fotos de referencia */
-const DB_VERSION = 2;
+/** v2 acrescentou fotos de referencia; v3, os exemplares de canto */
+const DB_VERSION = 3;
 const STORE = 'sightings';
 const PHOTO_STORE = 'photos';
+const EXEMPLAR_STORE = 'exemplars';
 
 export interface StoredPhoto {
   speciesId: string;
@@ -63,6 +65,10 @@ function openDb(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(PHOTO_STORE)) {
         db.createObjectStore(PHOTO_STORE, { keyPath: 'speciesId' });
+      }
+      if (!db.objectStoreNames.contains(EXEMPLAR_STORE)) {
+        const store = db.createObjectStore(EXEMPLAR_STORE, { keyPath: 'id' });
+        store.createIndex('speciesId', 'speciesId', { unique: false });
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -105,6 +111,18 @@ export async function listStoredPhotos(): Promise<StoredPhoto[]> {
 
 export async function clearStoredPhotos(): Promise<void> {
   await tx('readwrite', (store) => store.clear(), PHOTO_STORE);
+}
+
+export async function listExemplars(): Promise<Exemplar[]> {
+  return tx<Exemplar[]>('readonly', (store) => store.getAll() as IDBRequest<Exemplar[]>, EXEMPLAR_STORE);
+}
+
+export async function putExemplar(exemplar: Exemplar): Promise<void> {
+  await tx('readwrite', (store) => store.put(exemplar), EXEMPLAR_STORE);
+}
+
+export async function clearExemplars(): Promise<void> {
+  await tx('readwrite', (store) => store.clear(), EXEMPLAR_STORE);
 }
 
 export function newId(): string {
