@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { startRecording, encodeWav, decodeAudioFile, type RecorderHandle } from '../engine/audio/recorder';
+import { startRecording, encodeWav, type RecorderHandle } from '../engine/audio/recorder';
+import { decodeAudioFile } from '../engine/audio/decodeFile';
 import { analyzeSong, identifyFromFeatures, metricsFrom, type SongAnalysis } from '../engine/analyze';
 import type { Environment, FieldContext } from '../data/occurrence';
 import { FieldHints } from '../components/FieldHints';
@@ -217,8 +218,8 @@ export function ListenPage({ settings, onSaved, onOpenSpecies, onEnvironmentChan
     try {
       const decoded = await decodeAudioFile(file);
       runAnalysis(decoded.samples, decoded.sampleRate, settings.keepAudio ? file : null);
-    } catch {
-      setError('Nao foi possivel ler este arquivo de audio.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel ler este arquivo de audio.');
       setPhase('idle');
     }
   };
@@ -342,7 +343,14 @@ export function ListenPage({ settings, onSaved, onOpenSpecies, onEnvironmentChan
               <input
                 ref={fileInput}
                 type="file"
-                accept="audio/*"
+                /*
+                  Sem `accept` de proposito. No Safari do iOS, `accept="audio/*"`
+                  abre o seletor de fotos e videos e deixa os audios do app
+                  Arquivos inacessiveis — o .opus do WhatsApp entre eles, porque
+                  o iOS nao mapeia essa extensao para um tipo de audio conhecido.
+                  Sem restricao o usuario alcanca qualquer arquivo; o que nao for
+                  audio e recusado depois, com mensagem clara.
+                */
                 onChange={(e) => void onFile(e)}
                 className="sr-only"
                 aria-label="Escolher arquivo de audio"

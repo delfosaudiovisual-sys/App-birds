@@ -16,6 +16,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",
+    "@wasm-audio-decoders/ogg-vorbis": "^0.1.20",
+    "ogg-opus-decoder": "^1.7.5",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

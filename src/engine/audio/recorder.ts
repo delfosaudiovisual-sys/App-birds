@@ -202,22 +202,3 @@ export function encodeWav(samples: Float32Array, sampleRate: number): Blob {
   }
   return new Blob([buffer], { type: 'audio/wav' });
 }
-
-/** Decodifica um arquivo de audio enviado pelo usuario para PCM mono. */
-export async function decodeAudioFile(file: Blob): Promise<RecordingResult> {
-  const AudioCtx: typeof AudioContext =
-    window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-  const context = new AudioCtx();
-  try {
-    const buffer = await context.decodeAudioData(await file.arrayBuffer());
-    const channels = buffer.numberOfChannels;
-    const out = new Float32Array(buffer.length);
-    for (let c = 0; c < channels; c++) {
-      const data = buffer.getChannelData(c);
-      for (let i = 0; i < data.length; i++) out[i] += data[i] / channels;
-    }
-    return { samples: out, sampleRate: buffer.sampleRate, durationSec: buffer.duration };
-  } finally {
-    void context.close();
-  }
-}
