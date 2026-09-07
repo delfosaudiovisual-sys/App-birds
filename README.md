@@ -64,6 +64,29 @@ desafinação, andamento diferente, trecho cortado — e mede o acerto entre as 
 | Atual, com ambiente e tamanho informados | **42,4%** | **72,7%** |
 | Acaso | 1,7% | 5,2% |
 
+### O número que importa mais: cena de campo
+
+A tabela acima usa uma espécie sozinha num arquivo limpo. Uma segunda bancada
+(`scene.bench.ts`) monta o que de fato sai do bolso: silêncio antes e depois, ruído, e **outras
+aves cantando junto**.
+
+| Cenário | top-1 | top-3 |
+|---|---|---|
+| Só a ave, com pausa | 19,0% | 42,2% |
+| Com 1 ave ao fundo | 5,2% | 14,7% |
+| 2 aves ao fundo | 4,3% | 9,5% |
+| Quintal cheio | 4,3% | 9,5% |
+
+**Basta uma ave ao fundo para o acerto cair de 19% para 5%.** Esse é o limite real do método de
+perfis acústicos escritos à mão, e nenhum ajuste de fórmula o resolveu — média geométrica,
+verossimilhança gaussiana e oito critérios de seleção de trecho foram medidos e descartados.
+
+O app quebra a gravação em trechos e faixas de frequência e compara cada um separadamente. Um
+terceiro banco (`selection.bench.ts`) mostra por que isso importa e onde ele para: **se o trecho
+certo fosse sempre escolhido, o acerto seria 16,6% / 31,5%** — o dobro. Nenhum critério automático
+chega perto disso. Por isso os trechos aparecem na tela para você escolher: quem ouviu a ave sabe
+qual trecho é dela, e o app não sabe.
+
 **O que a bancada mede:** se as espécies da base são distinguíveis entre si pelo motor, e se o
 acerto sobrevive à degradação.
 

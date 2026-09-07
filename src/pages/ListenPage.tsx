@@ -83,6 +83,7 @@ export function ListenPage({ settings, onSaved, onOpenSpecies, onEnvironmentChan
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [context, setContext] = useState<FieldContext>({});
+  const [excerpt, setExcerpt] = useState<number | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
 
   const handleRef = useRef<RecorderHandle | null>(null);
@@ -104,10 +105,17 @@ export function ListenPage({ settings, onSaved, onOpenSpecies, onEnvironmentChan
     );
   }, [settings.defaultEnvironment]);
 
-  // Reidentifica sem refazer a FFT quando as pistas mudam.
+  // Reidentifica sem refazer a FFT quando as pistas ou o recorte mudam. Trocar
+  // de recorte custa um casamento, nao uma nova analise de sinal.
+  const activeFeatures = useMemo(() => {
+    if (!analysis) return null;
+    const index = excerpt ?? analysis.chosenExcerpt;
+    return analysis.excerpts[index]?.features ?? analysis.features;
+  }, [analysis, excerpt]);
+
   const refined = useMemo(
-    () => (analysis ? identifyFromFeatures(analysis.features, context) : null),
-    [analysis, context],
+    () => (activeFeatures ? identifyFromFeatures(activeFeatures, context) : null),
+    [activeFeatures, context],
   );
   const identification = refined?.identification ?? analysis?.identification ?? null;
   const songTypeResult = refined?.songType ?? analysis?.songType ?? null;
@@ -141,6 +149,7 @@ export function ListenPage({ settings, onSaved, onOpenSpecies, onEnvironmentChan
         try {
           const result = analyzeSong(samples, sampleRate);
           setAnalysis(result);
+          setExcerpt(null);
           setChosenSpecies(result.identification.matches[0]?.species.id ?? null);
           setPhase('done');
           if (audio) {
@@ -245,7 +254,7 @@ export function ListenPage({ settings, onSaved, onOpenSpecies, onEnvironmentChan
       songType: songTypeResult!.top.type,
       songTypeProbabilities: probabilities,
       songTypeConfidence: songTypeResult!.confidence,
-      metrics: metricsFrom(analysis.features),
+      metrics: metricsFrom(activeFeatures ?? analysis.features),
       thumbnail: analysis.thumbnail,
       audio: recordedRef.current ?? undefined,
       verified: chosenSpecies !== identification.matches[0]?.species.id,
@@ -383,6 +392,45 @@ export function ListenPage({ settings, onSaved, onOpenSpecies, onEnvironmentChan
               {Math.round(analysis.features.peakHz)} Hz dominante · analisado em {analysis.elapsedMs} ms neste aparelho
             </div>
           </div>
+
+          {analysis.excerpts.length > 1 && (
+            <div className="card">
+              <div className="card__title">Qual trecho e a ave?</div>
+              <p className="small muted" style={{ marginBottom: 12 }}>
+                A gravacao tem mais de um som separavel. Escolher o trecho certo e o que mais aumenta o acerto — voce
+                ouviu a ave e sabe qual e ela; o app so consegue chutar.
+              </p>
+              <div className="stack">
+                {analysis.excerpts.map((item, index) => {
+                  const active = (excerpt ?? analysis.chosenExcerpt) === index;
+                  return (
+                    <button
+                      key={`${item.kind}-${item.startSec}-${index}`}
+                      type="button"
+                      className="btn btn--block"
+                      aria-pressed={active}
+                      style={{
+                        justifyContent: 'space-between',
+                        borderColor: active ? 'var(--accent)' : 'var(--line)',
+                        background: active ? 'var(--accent-dim)' : 'var(--bg-elevated)',
+                      }}
+                      onClick={() => setExcerpt(index)}
+                    >
+                      <span style={{ textAlign: 'left', fontWeight: active ? 700 : 500 }}>
+                        {item.label}
+                        <span className="dim tiny" style={{ display: 'block', fontWeight: 400 }}>
+                          {item.noteCount} nota{item.noteCount === 1 ? '' : 's'}
+                        </span>
+                      </span>
+                      {index === analysis.chosenExcerpt && (
+                        <span className="tiny dim">escolha automatica</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           <FieldHints
             value={context}

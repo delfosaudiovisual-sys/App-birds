@@ -1,14 +1,24 @@
-import { extractFeatures, type AcousticFeatures } from './audio/features';
+import type { AcousticFeatures } from './audio/features';
 import { matchSpecies, type MatchResult } from './audio/matcher';
 import type { FieldContext } from '../data/occurrence';
 import { classifySongType, type SongTypeResult } from './audio/songType';
-import { analysisWindow } from './audio/recorder';
+import { identifySong, describeSource, type SourceCandidate } from './audio/identify';
 import { spectrogramThumbnail } from './audio/render';
 import type { Spectrogram } from './audio/spectrogram';
 import { extractImageFeatures } from './vision/imageFeatures';
 import { matchPhoto, type PhotoMatchResult } from './vision/photoMatcher';
 import type { LoadedImage } from './vision/loadImage';
 import { getSpecies } from '../data/species';
+
+export interface SongExcerpt {
+  /** rotulo legivel: "trecho de 2.1-4.8 s", "faixa de 3.0-7.5 kHz" */
+  label: string;
+  features: AcousticFeatures;
+  noteCount: number;
+  startSec: number;
+  endSec: number;
+  kind: 'inteiro' | 'trecho' | 'faixa';
+}
 
 export interface SongAnalysis {
   kind: 'canto';
@@ -17,6 +27,10 @@ export interface SongAnalysis {
   thumbnail: string;
   identification: MatchResult;
   songType: SongTypeResult;
+  /** recortes detectados na gravacao, para o usuario escolher qual analisar */
+  excerpts: SongExcerpt[];
+  /** indice do recorte escolhido automaticamente */
+  chosenExcerpt: number;
   /** milissegundos gastos na analise, exibido para provar que roda no aparelho */
   elapsedMs: number;
 }
@@ -44,12 +58,30 @@ export function identifyFromFeatures(
   return { identification, songType: classifySongType(features, best?.songTypePrior) };
 }
 
+function toExcerpt(candidate: SourceCandidate): SongExcerpt {
+  return {
+    label: describeSource(candidate.source),
+    features: candidate.features,
+    noteCount: candidate.features.noteCount,
+    startSec: candidate.source.startSec,
+    endSec: candidate.source.endSec,
+    kind: candidate.source.kind,
+  };
+}
+
 export function analyzeSong(samples: Float32Array, sampleRate: number, context?: FieldContext): SongAnalysis {
   const started = typeof performance !== 'undefined' ? performance.now() : Date.now();
-  const window = analysisWindow(sampleRate);
-  const { features, spectrogram } = extractFeatures(samples, sampleRate, window);
+
+  // A gravacao e quebrada em recortes e cada um e comparado isoladamente. Numa
+  // gravacao com mais de uma ave, medir o arquivo inteiro produz uma media que
+  // nenhuma delas cantou.
+  const identified = identifySong(samples, sampleRate, { context });
+  const features = identified.features;
+  const spectrogram = identified.spectrogram;
 
   const { identification, songType } = identifyFromFeatures(features, context);
+  const excerpts = identified.candidates.map(toExcerpt);
+  const chosenExcerpt = Math.max(0, identified.candidates.indexOf(identified.chosen));
 
   const ended = typeof performance !== 'undefined' ? performance.now() : Date.now();
 
@@ -57,6 +89,8 @@ export function analyzeSong(samples: Float32Array, sampleRate: number, context?:
     kind: 'canto',
     features,
     spectrogram,
+    excerpts,
+    chosenExcerpt,
     thumbnail: spectrogramThumbnail(spectrogram),
     identification,
     songType,

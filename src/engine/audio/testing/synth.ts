@@ -260,3 +260,71 @@ export function synthesizeSpecies(species: Species, options: SynthOptions = {}):
 
   return { samples: out, sampleRate };
 }
+
+/**
+ * Cena de campo: a especie alvo junto com o que sempre aparece numa gravacao
+ * real — silencio, ruido de fundo e OUTRAS AVES cantando no mesmo trecho.
+ *
+ * O banco de provas anterior sintetizava uma especie sozinha num arquivo limpo,
+ * o que media discriminacao mas nao media o que de fato acontece no quintal.
+ * Uma gravacao de oito segundos costuma ter a ave alvo em dois deles, um
+ * bem-te-vi ao fundo e um carro passando — e medir a especie sobre o arquivo
+ * inteiro mistura tudo numa media que nao descreve nenhum dos cantos.
+ */
+export interface SceneOptions {
+  sampleRate?: number;
+  seed?: number;
+  /** especies que cantam junto, alem da alvo */
+  distractors?: Species[];
+  /** quanto do trecho e silencio antes e depois do canto alvo */
+  leadSilenceSec?: number;
+  trailSilenceSec?: number;
+  degradation?: Partial<Degradation>;
+  /** amplitude relativa das distratoras (1 = tao alto quanto a alvo) */
+  distractorGain?: number;
+}
+
+export function synthesizeScene(target: Species, options: SceneOptions = {}): SynthResult {
+  const sampleRate = options.sampleRate ?? 32000;
+  const rng = new Rng((options.seed ?? 1) * 7919 + 13);
+  const lead = options.leadSilenceSec ?? rng.range(0.8, 2.5);
+  const trail = options.trailSilenceSec ?? rng.range(0.8, 2.5);
+  const gain = options.distractorGain ?? 0.75;
+
+  const targetAudio = synthesizeSpecies(target, {
+    sampleRate,
+    seed: options.seed,
+    degradation: { ...options.degradation, snrDb: 40 },
+  });
+
+  const distractors = (options.distractors ?? []).map((species, i) =>
+    synthesizeSpecies(species, {
+      sampleRate,
+      seed: (options.seed ?? 1) + 101 * (i + 1),
+      degradation: { ...options.degradation, snrDb: 40 },
+    }),
+  );
+
+  const leadSamples = Math.round(lead * sampleRate);
+  const trailSamples = Math.round(trail * sampleRate);
+  const totalLength = leadSamples + targetAudio.samples.length + trailSamples;
+  const out = new Float32Array(totalLength);
+
+  out.set(targetAudio.samples, leadSamples);
+
+  // Cada distratora entra num ponto proprio do trecho; se sobrar audio, ele e
+  // cortado. E assim que soa um quintal: as aves nao se revezam educadamente.
+  for (const distractor of distractors) {
+    const offset = Math.floor(rng.range(0, Math.max(1, totalLength - distractor.samples.length * 0.4)));
+    const n = Math.min(distractor.samples.length, totalLength - offset);
+    for (let i = 0; i < n; i++) out[offset + i] += distractor.samples[i] * gain;
+  }
+
+  const snrDb = options.degradation?.snrDb ?? 15;
+  const noise = fieldNoise(totalLength, rng);
+  const signalRms = rms(out) || 1e-6;
+  const noiseGain = signalRms / 10 ** (snrDb / 20) / (rms(noise) || 1e-6);
+  for (let i = 0; i < totalLength; i++) out[i] = Math.max(-1, Math.min(1, out[i] + noise[i] * noiseGain));
+
+  return { samples: out, sampleRate };
+}
